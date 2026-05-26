@@ -1,0 +1,15 @@
+{
+  "extends": ["config:base"],
+  "enabledManagers": ["dockerfile"],
+  "dockerfile": {
+    "fileMatch": ["(^|/)Dockerfile$"]
+  },
+  "packageRules": [
+    {
+      "managers": ["dockerfile"],
+      "matchDatasources": ["docker"],
+      "groupName": "Docker base image updates"
+    }
+  ],
+  "timezone": "UTC"
+}
