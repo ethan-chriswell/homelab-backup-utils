@@ -18,4 +18,4 @@ $CRON_SCHEDULE /usr/local/bin/backup >> /proc/1/fd/1 2>&1
 EOF
 
 printf '[%s] starting cron scheduler: %s\n' "$SERVICE_NAME" "$CRON_SCHEDULE"
-exec crond -f -l 8
+exec crond -f
