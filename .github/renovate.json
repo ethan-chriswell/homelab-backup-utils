@@ -8,8 +8,11 @@
     {
       "managers": ["dockerfile"],
       "matchDatasources": ["docker"],
-      "groupName": "Docker base image updates"
+      "groupName": "Docker base image updates",
+      "automerge": true,
+      "automergeType": "branch"
     }
   ],
+  "gitAuthor": "homelab-renovate <homelab-renovate@users.noreply.github.com>",
   "timezone": "UTC"
 }

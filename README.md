@@ -56,4 +56,12 @@ This repository includes:
 - `.github/renovate.json` for Renovate configuration
 - `.github/workflows/renovate.yml` to run Renovate on a schedule and on demand
 
+Renovate is configured to auto-merge Docker base image updates when the update branch passes required checks.
+
+To run Renovate from GitHub Actions, add a repository secret named `RENOVATE_TOKEN` that contains a Personal Access Token with:
+- `repo` permissions for the repository
+- `workflow` scope if Renovate should update workflow files
+
+If you want to run Renovate without a secret, use `GITHUB_TOKEN` only as a fallback, but note this is not recommended for full Renovate functionality.
+
 Enable the GitHub Renovate app for this repository, or run the workflow manually from the Actions tab.
