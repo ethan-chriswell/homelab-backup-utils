@@ -1,12 +1,16 @@
 {
-  "extends": ["config:base"],
+  "extends": ["config:recommended"],
   "enabledManagers": ["dockerfile"],
   "dockerfile": {
-    "fileMatch": ["(^|/)Dockerfile$"]
+    "managerFilePatterns": [
+      "/(^|/)Dockerfile$/"
+    ]
   },
   "packageRules": [
     {
-      "managers": ["dockerfile"],
+      "matchManagers": [
+        "dockerfile"
+      ],
       "matchDatasources": ["docker"],
       "groupName": "Docker base image updates",
       "automerge": true,
