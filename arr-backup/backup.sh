@@ -43,7 +43,7 @@ copy_latest_backup() {
   fi
 
   mkdir -p "$STAGING_DIR/$SERVICE_NAME"
-  latest="$(ls -t "$backup_dir"/$pattern 2>/dev/null | head -1 || true)"
+  latest="$(find "$backup_dir" -name "$pattern" -type f 2>/dev/null | xargs ls -t1 2>/dev/null | head -1 || true)"
   if [ -n "$latest" ]; then
     cp "$latest" "$STAGING_DIR/$SERVICE_NAME/"
     ls -t "$STAGING_DIR/$SERVICE_NAME/"$pattern 2>/dev/null | tail -n +3 | xargs rm -f 2>/dev/null || true
@@ -84,7 +84,7 @@ backup_starr() {
     return 1
   }
 
-  job_id="$(printf '%s' "$resp" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)"
+  job_id="$(printf '%s' "$resp" | grep -o '"id":[[:space:]]*[0-9]*' | head -1 | grep -o '[0-9]*$')"
   if [ -z "$job_id" ]; then
     error 'failed to parse backup job id'
     return 1
@@ -92,7 +92,7 @@ backup_starr() {
 
   i=0
   while [ "$i" -lt 60 ]; do
-    status="$(curl -sf -H "X-Api-Key: $api_key" "$SERVICE_URL/api/$SERVICE_API_VERSION/command/$job_id" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+    status="$(curl -sf -H "X-Api-Key: $api_key" "$SERVICE_URL/api/$SERVICE_API_VERSION/command/$job_id" | grep -o '"status":[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
     case "$status" in
       completed)
         break
