@@ -14,6 +14,11 @@ if [ -z "$CRON_SCHEDULE" ]; then
 fi
 
 cat >/etc/crontabs/root <<EOF
+SERVICE_NAME=${SERVICE_NAME:-mealie}
+SERVICE_URL=${SERVICE_URL:-}
+MEALIE_URL=${MEALIE_URL:-http://mealie_mealie:9000}
+MEALIE_DATA_DIR=${MEALIE_DATA_DIR:-/mealie-data}
+STAGING_DIR=${STAGING_DIR:-/staging}
 $CRON_SCHEDULE /usr/local/bin/backup >> /proc/1/fd/1 2>&1
 EOF
 
