@@ -1,4 +1,4 @@
-FROM alpine:3.20
+FROM alpine:3.23
 RUN apk add --no-cache curl cronie
 COPY backup.sh /usr/local/bin/backup
 COPY entrypoint.sh /usr/local/bin/entrypoint
