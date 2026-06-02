@@ -1,52 +1,112 @@
-# mealie-backup
+# mealie-backup-ui
 
-A lightweight Mealie backup container that triggers a Mealie backup via API and copies the latest zip to staging.
+A web UI for managing Mealie backups. Single Docker container: a Node.js/Fastify backend proxies the Mealie API and serves a Vue 3 + Tailwind frontend from the same port.
 
-## Build
+## Features
 
-```sh
-cd mealie-backup
-docker build -t mealie-api-backup .
+- View all backups with name, date, and size
+- "Last backup" status card showing how long ago the most recent backup was taken
+- Trigger an on-demand backup with one click
+- Download any backup as a zip file
+- Upload a local zip file to restore it into Mealie
+- Optional secondary storage: sync every created backup to a local directory or an S3-compatible bucket
+- Toast notifications for all async operations
+
+## Architecture
+
+```
+Browser
+  └── GET / or /assets/*  ──► Fastify static files (built Vue SPA)
+  └── /api/*              ──► Fastify API handlers
+                                └── Mealie API (token stays server-side)
+                                └── Secondary storage (local or S3, optional)
 ```
 
-## Required environment variables
+There is **one container**. The Dockerfile uses a multi-stage build to compile the Vue frontend, then copies the output into the Node runtime image alongside the backend. No separate frontend container runs at deployment time.
 
-- `MEALIE_URL` - full base URL for the Mealie service.
-- `MEALIE_DATA_DIR` - path to the Mealie data directory inside the container.
-- `MEALIE_API_TOKEN` - provided via `/run/secrets/mealie_api_token`.
+## Environment variables
 
-## Optional environment variables
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `3000` | Port the server listens on |
+| `MEALIE_URL` | `http://mealie_mealie:9000` | Base URL of your Mealie instance |
+| `MEALIE_API_TOKEN` | — | Mealie API token (mutually exclusive with `_FILE`) |
+| `MEALIE_API_TOKEN_FILE` | — | Path to a file containing the token (e.g. Docker secret) |
+| `STORAGE_TYPE` | `none` | Secondary storage backend: `none`, `local`, or `s3` |
+| `LOCAL_STORAGE_PATH` | `/data/backups` | Directory for local backups (only when `STORAGE_TYPE=local`) |
+| `S3_ENDPOINT` | — | S3-compatible endpoint URL, e.g. `http://minio:9000` (omit for AWS) |
+| `S3_BUCKET` | — | Bucket name |
+| `S3_REGION` | `us-east-1` | AWS/S3 region |
+| `S3_PREFIX` | `mealie/` | Key prefix for stored backups |
+| `S3_ACCESS_KEY_ID` | — | Access key (or use `S3_ACCESS_KEY_ID_FILE`) |
+| `S3_SECRET_ACCESS_KEY` | — | Secret key (or use `S3_SECRET_ACCESS_KEY_FILE`) |
+| `S3_FORCE_PATH_STYLE` | `false` | Set `true` for MinIO and other self-hosted S3 |
 
-- `STAGING_DIR` - destination directory for copied backups (default: `/staging`).
-- `CRON_SCHEDULE` - cron expression for scheduling backups (default: `@daily`).
-- `RUN_ONCE` - if `true`, run backup once and exit.
+Any variable ending in `_FILE` reads the value from a file — useful for Docker secrets.
 
-## Behavior
+## Secrets
 
-- Sends a `POST` to `${MEALIE_URL}/api/backups`.
-- Waits 15 seconds for Mealie to generate the backup.
-- Copies the newest `.zip` from `${MEALIE_DATA_DIR}/backups/` into `${STAGING_DIR}/mealie/`.
-- Keeps only the two newest files in the staging folder.
-- Runs on a configurable cron schedule via `CRON_SCHEDULE`.
+The recommended way to pass the Mealie token and S3 credentials is via Docker secrets mounted at `/run/secrets/<name>`, then pointed to with the `_FILE` variants:
 
-## Example
+```
+MEALIE_API_TOKEN_FILE=/run/secrets/mealie_api_token
+S3_SECRET_ACCESS_KEY_FILE=/run/secrets/s3_secret_key
+```
+
+## Example deployments
+
+### Minimal (no secondary storage)
 
 ```yaml
 services:
-  mealie-backup:
-    image: mealie-api-backup:latest
+  mealie-backup-ui:
+    image: ghcr.io/ethan-chriswell/mealie-backup-ui:latest
+    ports:
+      - "3000:3000"
     environment:
       MEALIE_URL: http://mealie:9000
-      MEALIE_DATA_DIR: /mealie-data
-    secrets:
-      - mealie_api_token
-    volumes:
-      - mealie-staging:/staging
-    depends_on:
-      - mealie
+      MEALIE_API_TOKEN: your-token-here
 ```
 
-## Notes
+### With local storage
 
-- The container now uses configurable cron scheduling via `CRON_SCHEDULE`.
-- Use `RUN_ONCE=true` for a one-shot backup run.
+```yaml
+services:
+  mealie-backup-ui:
+    image: ghcr.io/ethan-chriswell/mealie-backup-ui:latest
+    ports:
+      - "3000:3000"
+    environment:
+      MEALIE_URL: http://mealie:9000
+      MEALIE_API_TOKEN: your-token-here
+      STORAGE_TYPE: local
+      LOCAL_STORAGE_PATH: /data/backups
+    volumes:
+      - mealie_backups:/data/backups
+
+volumes:
+  mealie_backups:
+```
+
+### With S3-compatible storage (MinIO)
+
+See [docker-compose.example.yml](./docker-compose.example.yml) for a full working example.
+
+## Development
+
+```bash
+# Terminal 1 — backend (requires a running Mealie or set MEALIE_URL to a mock)
+cd backend && npm install && MEALIE_URL=http://localhost:9000 MEALIE_API_TOKEN=token npm run dev
+
+# Terminal 2 — frontend (proxies /api/* to localhost:3000)
+cd frontend && npm install && npm run dev
+
+# E2E tests (frontend dev server must be running, tests mock all API calls)
+cd e2e && npm install && npx playwright install chromium && npm test
+```
+
+## Building
+
+```bash
+docker build -t mealie-backup-ui .
+```

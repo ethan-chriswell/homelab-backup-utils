@@ -1,0 +1,19 @@
+node_modules/
+dist/
+build/
+.env
+.DS_Store
+*.log
+.idea/
+
+# Playwright test artifacts
+mealie-backup-ui/e2e/test-results/
+mealie-backup-ui/e2e/playwright-report/
+mealie-backup-ui/e2e/.playwright/
+
+# Dev settings (seeded locally, not committed)
+mealie-backup-ui/backend/settings.dev.json
+
+**/test-results/
+**/playwright-report/
+**/.playwright/
