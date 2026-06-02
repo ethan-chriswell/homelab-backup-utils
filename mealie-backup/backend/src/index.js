@@ -1,4 +1,6 @@
 import Fastify from 'fastify'
+import cookie from '@fastify/cookie'
+import session from '@fastify/session'
 import multipart from '@fastify/multipart'
 import staticPlugin from '@fastify/static'
 import { fileURLToPath } from 'url'
@@ -6,6 +8,8 @@ import { join, dirname } from 'path'
 import { existsSync, readFileSync } from 'fs'
 import { loadConfig } from './config.js'
 import { createSettingsStore } from './settings.js'
+import { generateSessionSecret } from './auth.js'
+import { registerAuthRoutes } from './authRoutes.js'
 import { registerRoutes } from './routes.js'
 import { isDebug, debug } from './debug.js'
 
@@ -20,13 +24,37 @@ if (isDebug) {
 
 const settingsStore = createSettingsStore(config.settingsPath)
 
+// Auto-generate and persist session secret on first boot
+let currentSettings = settingsStore.get()
+if (!currentSettings.auth.sessionSecret) {
+  const sessionSecret = generateSessionSecret()
+  settingsStore.save({ auth: { sessionSecret } })
+  currentSettings = settingsStore.get()
+  debug('server', 'generated and persisted session secret')
+}
+
 const app = Fastify({
   logger: {
     level: isDebug ? 'debug' : 'info',
   },
 })
 
+await app.register(cookie)
+await app.register(session, {
+  secret: currentSettings.auth.sessionSecret,
+  cookie: {
+    httpOnly: true,
+    secure: false, // homelab: typically HTTP behind a reverse proxy
+    sameSite: 'lax',
+    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+  },
+  saveUninitialized: false,
+})
+
 await app.register(multipart, { limits: { fileSize: 500 * 1024 * 1024 } })
+
+debug('server', 'registering auth routes')
+await registerAuthRoutes(app, { settingsStore })
 
 debug('server', 'registering API routes')
 await registerRoutes(app, { settingsStore })
