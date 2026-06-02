@@ -54,7 +54,7 @@ function formatSize(bytes) {
       <div
         class="border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors"
         :class="dragging
-          ? 'border-green-500 bg-green-500/5'
+          ? 'border-cyan-500 bg-cyan-500/5'
           : 'border-zinc-700 hover:border-zinc-600'"
         data-testid="drop-zone"
         @dragover.prevent="dragging = true"
@@ -80,7 +80,7 @@ function formatSize(bytes) {
       </div>
 
       <div v-if="file" class="mt-4 flex items-center gap-3 bg-zinc-800 rounded-lg px-4 py-3" data-testid="selected-file">
-        <svg class="w-4 h-4 text-green-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <svg class="w-4 h-4 text-cyan-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4" />
         </svg>
         <div class="min-w-0 flex-1">
@@ -102,7 +102,7 @@ function formatSize(bytes) {
           Cancel
         </button>
         <button
-          class="flex-1 rounded-xl py-2.5 text-sm font-medium bg-green-600 hover:bg-green-500 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          class="flex-1 rounded-xl py-2.5 text-sm font-medium bg-cyan-600 hover:bg-cyan-500 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           :disabled="!file"
           data-testid="upload-submit"
           @click="submit"

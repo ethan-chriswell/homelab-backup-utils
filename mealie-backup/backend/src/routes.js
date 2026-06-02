@@ -18,6 +18,17 @@ function computeToDelete(backups, retention) {
 }
 
 export async function registerRoutes(app, { settingsStore }) {
+  // Auth guard — all /api/* routes except /api/auth/* and /api/config (Docker healthcheck)
+  app.addHook('preHandler', async (req, reply) => {
+    if (!req.url.startsWith('/api/')) return
+    const exempt = req.url === '/api/config' || req.url.startsWith('/api/auth/')
+    if (exempt) return
+    if (!req.session?.authenticated) {
+      debug('routes', `auth guard: blocked ${req.method} ${req.url}`)
+      return reply.code(401).send({ error: 'Unauthorized' })
+    }
+  })
+
   function getMealie() {
     const { mealie } = settingsStore.get()
     debug('routes', `getMealie: url=${mealie.url} token=${maskToken(mealie.token)}`)
@@ -164,6 +175,11 @@ export async function registerRoutes(app, { settingsStore }) {
         ...s.storage,
         s3: { ...s.storage.s3, secretAccessKey: s.storage.s3.secretAccessKey ? '********' : '' },
       },
+      // Mask secrets; never expose sessionSecret or passwordHash
+      auth: {
+        local: { configured: Boolean(s.auth.local.passwordHash) },
+        oidc: { ...s.auth.oidc, clientSecret: s.auth.oidc.clientSecret ? '********' : '' },
+      },
     }
   })
 
@@ -182,18 +198,40 @@ export async function registerRoutes(app, { settingsStore }) {
     const secretKey = body.storage?.s3?.secretAccessKey === '********'
       ? current.storage.s3.secretAccessKey
       : (body.storage?.s3?.secretAccessKey ?? current.storage.s3.secretAccessKey)
+    const oidcSecret = body.auth?.oidc?.clientSecret === '********'
+      ? current.auth.oidc.clientSecret
+      : (body.auth?.oidc?.clientSecret ?? current.auth.oidc.clientSecret)
 
     const merged = {
       mealie: { ...body.mealie, token },
       storage: { ...body.storage, s3: { ...body.storage?.s3, secretAccessKey: secretKey } },
       schedule: body.schedule,
       retention: body.retention,
+      // Only allow updating OIDC config; sessionSecret and passwordHash are managed by auth routes
+      auth: body.auth ? { oidc: { ...body.auth.oidc, clientSecret: oidcSecret } } : undefined,
     }
 
     const saved = settingsStore.save(merged)
     debug('routes', 'settings saved — updating scheduler')
     updateSchedule(saved.schedule, scheduleWrapper(), app.log)
     return reply.send({ ok: true })
+  })
+
+  // ── Mealie connection status ──────────────────────────────────────────────
+  app.get('/api/status', async (req, reply) => {
+    const { mealie } = settingsStore.get()
+    if (!mealie.url || !mealie.token) {
+      debug('routes', 'GET /api/status: unconfigured')
+      return reply.send({ mealie: 'unconfigured' })
+    }
+    try {
+      await createMealieClient(mealie.url, mealie.token).listBackups()
+      debug('routes', 'GET /api/status: ok')
+      return reply.send({ mealie: 'ok' })
+    } catch (err) {
+      debug('routes', `GET /api/status: error — ${err.message}`)
+      return reply.send({ mealie: 'error' })
+    }
   })
 
   // ── Config ────────────────────────────────────────────────────────────────

@@ -1,0 +1,33 @@
+# Example: mealie-backup-ui with a named volume for settings persistence.
+#
+# MEALIE_URL and MEALIE_API_TOKEN seed the initial connection on first boot.
+# After that, all configuration (storage, schedule, retention, OIDC) is
+# managed through the in-app Settings UI and stored in /data/settings.json.
+#
+# Adjust MEALIE_URL and MEALIE_API_TOKEN to match your environment.
+
+services:
+  mealie-backup-ui:
+    image: ghcr.io/ethan-chriswell/mealie-backup-ui:latest
+    ports:
+      - "3000:3000"
+    environment:
+      # ── Mealie connection (seeds first boot only) ─────────────────────────
+      MEALIE_URL: http://mealie_mealie:9000
+      MEALIE_API_TOKEN: your-token-here
+    volumes:
+      # Persists settings.json and (if local storage is configured) backups
+      - mealie_backup_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/config"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+
+volumes:
+  mealie_backup_data:
+    driver: local

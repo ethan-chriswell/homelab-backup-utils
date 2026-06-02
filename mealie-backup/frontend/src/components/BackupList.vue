@@ -51,7 +51,7 @@ function formatSize(size) {
       <div
         v-for="backup in backups"
         :key="backup.name"
-        class="group px-6 py-4 flex items-center gap-4 hover:bg-zinc-800/40 transition-colors"
+        class="px-6 py-4 flex items-center gap-4 hover:bg-zinc-800/40 transition-colors"
         :data-testid="`backup-row-${backup.name}`"
       >
         <div class="w-8 h-8 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0">
@@ -67,9 +67,9 @@ function formatSize(size) {
 
         <span class="text-xs text-zinc-600 font-mono shrink-0 hidden sm:block">{{ formatSize(backup.size) }}</span>
 
-        <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div class="flex items-center gap-0.5 shrink-0">
           <button
-            class="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-700 transition-colors"
+            class="p-1.5 rounded-lg text-zinc-600 hover:text-cyan-400 hover:bg-zinc-800 transition-colors"
             title="Download"
             :data-testid="`download-${backup.name}`"
             @click="emit('download', backup.name)"
@@ -79,7 +79,7 @@ function formatSize(size) {
             </svg>
           </button>
           <button
-            class="p-1.5 rounded-lg text-zinc-500 hover:text-amber-400 hover:bg-zinc-700 transition-colors"
+            class="p-1.5 rounded-lg text-zinc-600 hover:text-amber-400 hover:bg-zinc-800 transition-colors"
             title="Restore"
             :data-testid="`restore-${backup.name}`"
             @click="emit('restore', backup.name)"
@@ -89,7 +89,7 @@ function formatSize(size) {
             </svg>
           </button>
           <button
-            class="p-1.5 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-zinc-700 transition-colors disabled:opacity-40"
+            class="p-1.5 rounded-lg text-zinc-600 hover:text-red-400 hover:bg-zinc-800 transition-colors disabled:opacity-40"
             title="Delete"
             :disabled="deleting === backup.name"
             :data-testid="`delete-${backup.name}`"

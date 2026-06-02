@@ -46,5 +46,31 @@ export const api = {
 
   getConfig: () => request('/api/config'),
 
+  getStatus: () => request('/api/status'),
+
   runCleanup: () => request('/api/storage/cleanup', { method: 'POST' }),
+
+  auth: {
+    status: () => request('/api/auth/status'),
+
+    bootstrap: (password) => request('/api/auth/bootstrap', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    }),
+
+    login: (password) => request('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    }),
+
+    changePassword: (currentPassword, newPassword) => request('/api/auth/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+
+    logout: () => request('/api/auth/logout', { method: 'POST' }),
+  },
 }

@@ -1,11 +1,69 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { api } from './api.js'
 import StatusCard from './components/StatusCard.vue'
 import BackupList from './components/BackupList.vue'
 import UploadModal from './components/UploadModal.vue'
 import SettingsModal from './components/SettingsModal.vue'
+import LoginPage from './components/LoginPage.vue'
+import LogoIcon from './components/LogoIcon.vue'
 import Toast from './components/Toast.vue'
+
+// ── Auth state ────────────────────────────────────────────────────────────────
+const authLoading = ref(true)
+const authenticated = ref(false)
+const bootstrapped = ref(false)
+const oidcEnabled = ref(false)
+const oidcError = ref('')
+
+async function checkAuth() {
+  try {
+    const status = await api.auth.status()
+    authenticated.value = status.authenticated
+    bootstrapped.value = status.bootstrapped
+    oidcEnabled.value = status.oidcEnabled
+  } catch {
+    authenticated.value = false
+  } finally {
+    authLoading.value = false
+  }
+}
+
+function onAuthenticated() {
+  authenticated.value = true
+  Promise.all([fetchConfig(), fetchSchedule(), fetchBackups()])
+  startStatusPolling()
+}
+
+async function logout() {
+  try {
+    await api.auth.logout()
+  } catch { /* ignore */ }
+  clearInterval(statusInterval)
+  statusInterval = null
+  mealieStatus.value = 'checking'
+  authenticated.value = false
+  bootstrapped.value = true
+  backups.value = []
+}
+
+// ── App state ─────────────────────────────────────────────────────────────────
+const mealieStatus = ref('checking') // 'checking' | 'ok' | 'error' | 'unconfigured'
+let statusInterval = null
+
+async function checkStatus() {
+  try {
+    const { mealie } = await api.getStatus()
+    mealieStatus.value = mealie
+  } catch {
+    mealieStatus.value = 'error'
+  }
+}
+
+function startStatusPolling() {
+  checkStatus()
+  statusInterval = setInterval(checkStatus, 30_000)
+}
 
 const backups = ref([])
 const loading = ref(true)
@@ -123,22 +181,76 @@ function totalSize(backups) {
   return `${(bytes / 1024).toFixed(0)} KB`
 }
 
-onMounted(() => Promise.all([fetchConfig(), fetchSchedule(), fetchBackups()]))
+onUnmounted(() => {
+  clearInterval(statusInterval)
+})
+
+onMounted(async () => {
+  // Check for OIDC error passed back via URL query param
+  const params = new URLSearchParams(window.location.search)
+  if (params.has('auth_error')) {
+    oidcError.value = params.get('auth_error')
+    window.history.replaceState({}, '', '/')
+  }
+
+  await checkAuth()
+  if (authenticated.value) {
+    await Promise.all([fetchConfig(), fetchSchedule(), fetchBackups()])
+    startStatusPolling()
+  }
+})
 </script>
 
 <template>
-  <div class="min-h-screen bg-zinc-950">
+  <!-- Auth loading -->
+  <div v-if="authLoading" class="min-h-screen bg-zinc-950 flex items-center justify-center">
+    <svg class="w-6 h-6 animate-spin text-zinc-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+    </svg>
+  </div>
+
+  <!-- Login / bootstrap page -->
+  <LoginPage
+    v-else-if="!authenticated"
+    :bootstrapped="bootstrapped"
+    :oidc-enabled="oidcEnabled"
+    :error="oidcError"
+    @authenticated="onAuthenticated"
+  />
+
+  <!-- Main app -->
+  <div v-else class="min-h-screen bg-zinc-950">
+    <!-- Top accent bar -->
+    <div class="h-0.5 bg-gradient-to-r from-cyan-600 via-cyan-400 to-teal-400"></div>
+
     <!-- Header -->
-    <header class="border-b border-zinc-900 px-6 py-4 flex items-center justify-between">
+    <header class="border-b border-zinc-800 px-6 py-4 flex items-center justify-between">
       <div class="flex items-center gap-3">
-        <span class="text-2xl" role="img" aria-label="salad">🥗</span>
-        <div>
-          <h1 class="text-base font-semibold text-zinc-100 leading-none">Mealie Backup</h1>
-          <p class="text-xs text-zinc-600 mt-0.5">Backup manager</p>
-        </div>
+        <LogoIcon :size="34" />
+        <h1 class="text-base font-semibold text-zinc-100 leading-none">Mealie Backup</h1>
+        <span
+          v-if="mealieStatus !== 'checking'"
+          class="hidden sm:flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full transition-colors"
+          :class="{
+            'bg-green-500/10 text-green-400':  mealieStatus === 'ok',
+            'bg-red-500/10   text-red-400':    mealieStatus === 'error',
+            'bg-zinc-500/10  text-zinc-500':   mealieStatus === 'unconfigured',
+          }"
+        >
+          <span
+            class="w-1.5 h-1.5 rounded-full"
+            :class="{
+              'bg-green-400 animate-pulse': mealieStatus === 'ok',
+              'bg-red-400':                mealieStatus === 'error',
+              'bg-zinc-500':               mealieStatus === 'unconfigured',
+            }"
+          ></span>
+          {{ mealieStatus === 'ok' ? 'Connected' : mealieStatus === 'error' ? 'Disconnected' : 'Not configured' }}
+        </span>
       </div>
 
       <div class="flex items-center gap-2">
+        <!-- Settings -->
         <button
           class="w-9 h-9 flex items-center justify-center rounded-xl text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
           title="Settings"
@@ -163,7 +275,7 @@ onMounted(() => Promise.all([fetchConfig(), fetchSchedule(), fetchBackups()]))
         </button>
 
         <button
-          class="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium bg-green-600 hover:bg-green-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          class="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium bg-cyan-600 hover:bg-cyan-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           :disabled="backing || !configured"
           data-testid="backup-now-button"
           @click="triggerBackup"
@@ -177,6 +289,18 @@ onMounted(() => Promise.all([fetchConfig(), fetchSchedule(), fetchBackups()]))
             <path v-else stroke-linecap="round" stroke-linejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5m8.25 3v6.75m0 0l-3-3m3 3l3-3M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" />
           </svg>
           {{ backing ? 'Creating…' : 'Backup Now' }}
+        </button>
+
+        <!-- Logout -->
+        <button
+          class="w-9 h-9 flex items-center justify-center rounded-xl text-zinc-500 hover:text-red-400 hover:bg-zinc-800 transition-colors"
+          title="Sign out"
+          data-testid="logout-button"
+          @click="logout"
+        >
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75" />
+          </svg>
         </button>
       </div>
     </header>

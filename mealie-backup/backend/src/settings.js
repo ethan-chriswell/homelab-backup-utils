@@ -29,6 +29,20 @@ export const DEFAULTS = {
     keepLast: 10,
     keepDays: 0,
   },
+  auth: {
+    sessionSecret: '',
+    local: {
+      passwordHash: '',
+    },
+    oidc: {
+      enabled: false,
+      issuer: '',
+      clientId: '',
+      clientSecret: '',
+      redirectUri: '',
+      scopes: 'openid profile email',
+    },
+  },
 }
 
 function deepMerge(target, source) {

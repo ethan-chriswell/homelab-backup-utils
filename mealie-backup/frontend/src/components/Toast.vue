@@ -32,7 +32,7 @@ defineExpose({ add })
         :data-testid="`toast-${toast.type}`"
       >
         <span class="mt-0.5 shrink-0">
-          <svg v-if="toast.type === 'success'" class="w-4 h-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <svg v-if="toast.type === 'success'" class="w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
           </svg>
           <svg v-else class="w-4 h-4 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">

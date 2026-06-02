@@ -44,8 +44,8 @@ function scheduleLabel(cron) {
 <template>
   <div class="rounded-2xl bg-zinc-900 border border-zinc-800 p-6" data-testid="status-card">
     <div class="flex items-center gap-3 mb-4">
-      <div class="w-8 h-8 rounded-lg bg-green-500/10 flex items-center justify-center">
-        <svg class="w-4 h-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <div class="w-8 h-8 rounded-lg bg-cyan-500/10 flex items-center justify-center">
+        <svg class="w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
       </div>
