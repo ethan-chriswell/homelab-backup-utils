@@ -1,0 +1,31 @@
+# Example: arr-backup with a named volume for settings persistence.
+#
+# ARR_SERVICE_URL and ARR_SERVICE_API_KEY seed the initial service on first boot.
+# After that, all configuration (services, storage, schedule, retention, OIDC) is
+# managed through the in-app Settings UI and stored in /data/settings.json.
+#
+# Adjust ARR_SERVICE_URL and ARR_SERVICE_API_KEY to match your environment.
+
+services:
+  arr-backup:
+    image: ghcr.io/ethan-chriswell/arr-backup:latest
+    ports:
+      - "3000:3000"
+    environment:
+      ARR_SERVICE_URL: http://radarr:7878
+      ARR_SERVICE_API_KEY: your-api-key-here
+    volumes:
+      - arr_backup_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/config"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+
+volumes:
+  arr_backup_data:
+    driver: local
