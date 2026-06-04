@@ -19,6 +19,9 @@ function computeToDelete(backups, retention) {
 }
 
 export async function registerRoutes(app, { settingsStore }) {
+  // Health endpoint — no auth, used by Docker HEALTHCHECK
+  app.get('/health', async () => ({ ok: true }))
+
   // Auth guard — all /api/* routes except /api/auth/* and /api/config (Docker healthcheck)
   app.addHook('preHandler', async (req, reply) => {
     if (!req.url.startsWith('/api/')) return
@@ -55,9 +58,9 @@ export async function registerRoutes(app, { settingsStore }) {
     return `${service.type}/${service.name}/`
   }
 
-  async function runCleanupForService(service) {
+  async function runCleanupForService(service, retentionOverride) {
     const settings = settingsStore.get()
-    const retention = service.retention ?? settings.retention
+    const retention = retentionOverride ?? service.retention ?? settings.retention
     const storageConfig = settings.storage
     debug('routes', `runCleanupForService: ${service.name} (${service.id})`)
     if (!retention.enabled) {
@@ -99,12 +102,12 @@ export async function registerRoutes(app, { settingsStore }) {
     return { arrDeleted, storageDeleted }
   }
 
-  async function runCleanup() {
+  async function runCleanup(retentionOverride) {
     const services = getServices()
     const results = {}
     for (const service of services) {
       try {
-        results[service.id] = await runCleanupForService(service)
+        results[service.id] = await runCleanupForService(service, retentionOverride)
       } catch (err) {
         debug('routes', `runCleanup: error for ${service.name}: ${err.message}`)
         results[service.id] = { error: err.message }
@@ -157,11 +160,11 @@ export async function registerRoutes(app, { settingsStore }) {
   }
 
   function scheduleWrapper() {
-    return async () => {
+    return async (retentionOverride) => {
       debug('routes', 'scheduled backup triggered by cron')
       try {
         await runAllBackups()
-        await runCleanup()
+        await runCleanup(retentionOverride)
       } catch (err) {
         app.log.error(`Scheduled backup failed: ${err.message}`)
         debug('routes', `scheduled backup error: ${err.message}`)
@@ -170,7 +173,7 @@ export async function registerRoutes(app, { settingsStore }) {
   }
 
   function serviceScheduleWrapper() {
-    return (serviceId) => {
+    return (serviceId, retentionOverride) => {
       const service = getServices().find(s => s.id === serviceId)
       if (!service) {
         debug('routes', `scheduled service ${serviceId} not found — skipping`)
@@ -178,14 +181,14 @@ export async function registerRoutes(app, { settingsStore }) {
       }
       debug('routes', `per-service scheduled backup triggered for ${service.name}`)
       runBackupForService(service)
-        .then(() => runCleanupForService(service))
+        .then(() => runCleanupForService(service, retentionOverride))
         .catch(err => app.log.error(`Scheduled backup failed for ${service.name}: ${err.message}`))
     }
   }
 
   function applySchedules(settings) {
     updateSchedules(
-      { global: settings.schedule, services: settings.services },
+      settings.schedules || [],
       { onGlobal: scheduleWrapper(), onService: serviceScheduleWrapper() },
       app.log
     )
@@ -263,6 +266,7 @@ export async function registerRoutes(app, { settingsStore }) {
 
     const merged = {
       services,
+      schedules: body.schedules ?? current.schedules ?? [],
       storage: { ...body.storage, s3: { ...body.storage?.s3, secretAccessKey: secretKey } },
       schedule: body.schedule,
       retention: body.retention,
@@ -275,28 +279,89 @@ export async function registerRoutes(app, { settingsStore }) {
     return reply.send({ ok: true })
   })
 
+  // ── Test storage ─────────────────────────────────────────────────────────
+  app.post('/api/settings/test-storage', async (req, reply) => {
+    const current = settingsStore.get()
+    const body = req.body ?? {}
+    const storageType = body.storage?.type ?? current.storage.type
+
+    if (storageType === 'none') {
+      return reply.send({ ok: true })
+    }
+
+    if (storageType === 'local') {
+      const { mkdirSync } = await import('fs')
+      const path = body.storage?.local?.path ?? current.storage.local.path
+      try {
+        mkdirSync(path, { recursive: true })
+        return reply.send({ ok: true })
+      } catch (err) {
+        return reply.send({ ok: false, error: err.message })
+      }
+    }
+
+    if (storageType === 's3') {
+      const s3 = {
+        ...current.storage.s3,
+        ...body.storage?.s3,
+        secretAccessKey: body.storage?.s3?.secretAccessKey === '********'
+          ? current.storage.s3.secretAccessKey
+          : (body.storage?.s3?.secretAccessKey ?? current.storage.s3.secretAccessKey),
+      }
+      const endpoint = s3.endpoint || '(AWS default)'
+      app.log.info(`Testing S3 storage: endpoint=${endpoint} bucket=${s3.bucket}`)
+      try {
+        const { S3Client, HeadBucketCommand } = await import('@aws-sdk/client-s3')
+        const opts = {
+          region: s3.region,
+          credentials: { accessKeyId: s3.accessKeyId, secretAccessKey: s3.secretAccessKey },
+          maxAttempts: 1,
+        }
+        if (s3.endpoint) { opts.endpoint = s3.endpoint; opts.forcePathStyle = s3.forcePathStyle }
+        const client = new S3Client(opts)
+        const abort = new AbortController()
+        const timer = setTimeout(() => abort.abort(), 10000)
+        try {
+          await client.send(new HeadBucketCommand({ Bucket: s3.bucket }), { abortSignal: abort.signal })
+          app.log.info(`S3 storage test OK: endpoint=${endpoint} bucket=${s3.bucket}`)
+          return reply.send({ ok: true })
+        } finally {
+          clearTimeout(timer)
+        }
+      } catch (err) {
+        const msg = err.name === 'AbortError' ? `Connection timed out after 10s (${endpoint})` : err.message
+        app.log.warn(`S3 storage test failed: ${msg}`)
+        return reply.send({ ok: false, error: msg })
+      }
+    }
+
+    return reply.send({ ok: false, error: 'Unknown storage type' })
+  })
+
   // ── Test connection ───────────────────────────────────────────────────────
   app.post('/api/settings/test', async (req, reply) => {
-    const { serviceId, url: directUrl, apiKey: directApiKey } = req.body ?? {}
+    const { serviceId, url: directUrl, apiKey: directApiKey, type: directType } = req.body ?? {}
 
-    let url, apiKey, label
+    let url, apiKey, type, label
     if (serviceId) {
       const service = settingsStore.get().services.find(s => s.id === serviceId)
       if (!service) return reply.send({ ok: false, error: 'Service not found' })
       url = service.url
       apiKey = service.apiKey
+      type = service.type
       label = service.name
     } else if (directUrl) {
       url = directUrl
       apiKey = directApiKey || ''
+      type = directType || 'radarr'
       label = directUrl
     } else {
       return reply.send({ ok: false, error: 'serviceId or url is required' })
     }
 
-    debug('routes', `test connection: ${label} url=${url}`)
+    debug('routes', `test connection: ${label} url=${url} type=${type}`)
     try {
-      await createArrClient(url, apiKey).ping()
+      await createClient(type, url, apiKey).ping()
       debug('routes', `test connection: success for ${label}`)
       return reply.send({ ok: true })
     } catch (err) {
@@ -424,7 +489,25 @@ export async function registerRoutes(app, { settingsStore }) {
     debug('routes', `DELETE /api/backups/${serviceId}/${id}`)
     try {
       const service = getService(serviceId)
-      await createClient(service.type, service.url, service.apiKey).deleteBackup(id)
+      const client = createClient(service.type, service.url, service.apiKey)
+      const backups = await client.listBackups()
+      const backup = backups.find(b => String(b.id) === String(id))
+      await client.deleteBackup(id)
+      const { storage: storageConfig } = settingsStore.get()
+      if (backup && storageConfig.type !== 'none') {
+        const prefix = storagePrefix(service)
+        const storage = createStorage({
+          storageType: storageConfig.type,
+          localPath: `${storageConfig.local.path}/${prefix}`,
+          s3: { ...storageConfig.s3, prefix: `${storageConfig.s3.prefix}${prefix}` },
+        })
+        try {
+          await storage.delete(backup.name)
+          debug('routes', `DELETE /api/backups/${serviceId}/${id} storage ok`)
+        } catch (storageErr) {
+          debug('routes', `delete storage error (non-fatal): ${storageErr.message}`)
+        }
+      }
       return reply.code(204).send()
     } catch (err) {
       debug('routes', `delete error: ${err.message}`)

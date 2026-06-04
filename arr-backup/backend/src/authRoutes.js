@@ -8,45 +8,58 @@ export async function registerAuthRoutes(app, { settingsStore }) {
     const bootstrapped = Boolean(auth.local.passwordHash)
     const authenticated = Boolean(req.session?.authenticated)
     const oidcEnabled = Boolean(auth.oidc.enabled && auth.oidc.issuer && auth.oidc.clientId)
+    const username = authenticated ? (auth.local.username || 'admin') : null
     debug('auth', `status: authenticated=${authenticated} bootstrapped=${bootstrapped} oidcEnabled=${oidcEnabled}`)
-    return { authenticated, bootstrapped, oidcEnabled }
+    return { authenticated, bootstrapped, oidcEnabled, username }
   })
 
-  // POST /api/auth/bootstrap — set admin password; only works before any password is configured
+  // POST /api/auth/bootstrap — set admin username + password; only works before any password is configured
   app.post('/api/auth/bootstrap', async (req, reply) => {
     const { auth } = settingsStore.get()
     if (auth.local.passwordHash) {
       debug('auth', 'bootstrap rejected — already bootstrapped')
       return reply.code(409).send({ error: 'Already set up' })
     }
-    const { password } = req.body ?? {}
+    const { username, password } = req.body ?? {}
+    const trimmedUsername = (username || '').trim()
+    if (!trimmedUsername) {
+      return reply.code(400).send({ error: 'Username is required' })
+    }
     if (!password || password.length < 8) {
       return reply.code(400).send({ error: 'Password must be at least 8 characters' })
     }
     const passwordHash = await hashPassword(password)
-    settingsStore.save({ auth: { local: { passwordHash } } })
+    settingsStore.save({ auth: { local: { username: trimmedUsername, passwordHash } } })
     req.session.authenticated = true
     req.session.method = 'local'
-    debug('auth', 'bootstrap complete — admin password set and session created')
+    debug('auth', `bootstrap complete — username="${trimmedUsername}" session created`)
     return reply.send({ ok: true })
   })
 
-  // POST /api/auth/login — local password login
+  // POST /api/auth/login — local username + password login
   app.post('/api/auth/login', async (req, reply) => {
     const { auth } = settingsStore.get()
     if (!auth.local.passwordHash) {
       return reply.code(403).send({ error: 'App not set up yet' })
     }
-    const { password } = req.body ?? {}
+    const { username, password } = req.body ?? {}
     if (!password) return reply.code(400).send({ error: 'Password required' })
+
+    // Username check: skip if no username stored (backward compat with existing installs)
+    const storedUsername = auth.local.username
+    if (storedUsername && username?.trim().toLowerCase() !== storedUsername.toLowerCase()) {
+      debug('auth', 'login failed — wrong username')
+      return reply.code(401).send({ error: 'Incorrect username or password' })
+    }
+
     const ok = await verifyPassword(password, auth.local.passwordHash)
     if (!ok) {
       debug('auth', 'login failed — wrong password')
-      return reply.code(401).send({ error: 'Incorrect password' })
+      return reply.code(401).send({ error: 'Incorrect username or password' })
     }
     req.session.authenticated = true
     req.session.method = 'local'
-    debug('auth', 'local login successful')
+    debug('auth', `local login successful — username="${storedUsername}"`)
     return reply.send({ ok: true })
   })
 
@@ -121,6 +134,25 @@ export async function registerAuthRoutes(app, { settingsStore }) {
       debug('auth', `OIDC callback error: ${err.message}`)
       return reply.redirect(`/?auth_error=${encodeURIComponent(err.message)}`)
     }
+  })
+
+  // POST /api/auth/change-username — requires active session + current password
+  app.post('/api/auth/change-username', async (req, reply) => {
+    if (!req.session?.authenticated) {
+      return reply.code(401).send({ error: 'Unauthorized' })
+    }
+    const { auth } = settingsStore.get()
+    const { currentPassword, newUsername } = req.body ?? {}
+    if (!currentPassword || !newUsername?.trim()) {
+      return reply.code(400).send({ error: 'currentPassword and newUsername are required' })
+    }
+    const ok = await verifyPassword(currentPassword, auth.local.passwordHash)
+    if (!ok) {
+      return reply.code(401).send({ error: 'Current password is incorrect' })
+    }
+    settingsStore.save({ auth: { local: { username: newUsername.trim() } } })
+    debug('auth', `username changed to "${newUsername.trim()}"`)
+    return reply.send({ ok: true })
   })
 
   // POST /api/auth/logout

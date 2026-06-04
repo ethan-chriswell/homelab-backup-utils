@@ -17,6 +17,7 @@ export const DEFAULTS = {
       forcePathStyle: false,
     },
   },
+  schedules: [],
   schedule: {
     enabled: false,
     cron: '0 2 * * *',
@@ -29,6 +30,7 @@ export const DEFAULTS = {
   auth: {
     sessionSecret: '',
     local: {
+      username: 'admin',
       passwordHash: '',
     },
     oidc: {
@@ -65,6 +67,9 @@ function inferTypeFromUrl(url) {
   if (lower.includes('readarr')) return 'readarr'
   if (lower.includes('lidarr')) return 'lidarr'
   if (lower.includes('whisparr')) return 'whisparr'
+  if (lower.includes('bazarr')) return 'bazarr'
+  if (lower.includes('jellyseerr') || lower.includes('overseerr') || lower.includes('seerr')) return 'seerr'
+  if (lower.includes('maintainerr')) return 'maintainerr'
   return 'radarr'
 }
 

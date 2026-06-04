@@ -18,6 +18,9 @@ function computeToDelete(backups, retention) {
 }
 
 export async function registerRoutes(app, { settingsStore }) {
+  // Health endpoint — no auth, used by Docker HEALTHCHECK
+  app.get('/health', async () => ({ ok: true }))
+
   // Auth guard — all /api/* routes except /api/auth/* and /api/config (Docker healthcheck)
   app.addHook('preHandler', async (req, reply) => {
     if (!req.url.startsWith('/api/')) return
@@ -136,6 +139,65 @@ export async function registerRoutes(app, { settingsStore }) {
       }
     }
   }
+
+  // ── Test storage ─────────────────────────────────────────────────────────
+  app.post('/api/settings/test-storage', async (req, reply) => {
+    const current = settingsStore.get()
+    const body = req.body ?? {}
+    const storageType = body.storage?.type ?? current.storage.type
+
+    if (storageType === 'none') {
+      return reply.send({ ok: true })
+    }
+
+    if (storageType === 'local') {
+      const { mkdirSync } = await import('fs')
+      const path = body.storage?.local?.path ?? current.storage.local.path
+      try {
+        mkdirSync(path, { recursive: true })
+        return reply.send({ ok: true })
+      } catch (err) {
+        return reply.send({ ok: false, error: err.message })
+      }
+    }
+
+    if (storageType === 's3') {
+      const s3 = {
+        ...current.storage.s3,
+        ...body.storage?.s3,
+        secretAccessKey: body.storage?.s3?.secretAccessKey === '********'
+          ? current.storage.s3.secretAccessKey
+          : (body.storage?.s3?.secretAccessKey ?? current.storage.s3.secretAccessKey),
+      }
+      const endpoint = s3.endpoint || '(AWS default)'
+      app.log.info(`Testing S3 storage: endpoint=${endpoint} bucket=${s3.bucket}`)
+      try {
+        const { S3Client, HeadBucketCommand } = await import('@aws-sdk/client-s3')
+        const opts = {
+          region: s3.region,
+          credentials: { accessKeyId: s3.accessKeyId, secretAccessKey: s3.secretAccessKey },
+          maxAttempts: 1,
+        }
+        if (s3.endpoint) { opts.endpoint = s3.endpoint; opts.forcePathStyle = s3.forcePathStyle }
+        const client = new S3Client(opts)
+        const abort = new AbortController()
+        const timer = setTimeout(() => abort.abort(), 10000)
+        try {
+          await client.send(new HeadBucketCommand({ Bucket: s3.bucket }), { abortSignal: abort.signal })
+          app.log.info(`S3 storage test OK: endpoint=${endpoint} bucket=${s3.bucket}`)
+          return reply.send({ ok: true })
+        } finally {
+          clearTimeout(timer)
+        }
+      } catch (err) {
+        const msg = err.name === 'AbortError' ? `Connection timed out after 10s (${endpoint})` : err.message
+        app.log.warn(`S3 storage test failed: ${msg}`)
+        return reply.send({ ok: false, error: msg })
+      }
+    }
+
+    return reply.send({ ok: false, error: 'Unknown storage type' })
+  })
 
   // ── Test connection ───────────────────────────────────────────────────────
   app.post('/api/settings/test', async (req, reply) => {
@@ -295,6 +357,15 @@ export async function registerRoutes(app, { settingsStore }) {
     try {
       await getMealie().deleteBackup(req.params.name)
       debug('routes', `DELETE /api/backups/${req.params.name} ok`)
+      const { storage: storageConfig } = settingsStore.get()
+      if (storageConfig.type !== 'none') {
+        try {
+          await getStorage().delete(req.params.name)
+          debug('routes', `DELETE /api/backups/${req.params.name} storage ok`)
+        } catch (storageErr) {
+          debug('routes', `delete storage error (non-fatal): ${storageErr.message}`)
+        }
+      }
       return reply.code(204).send()
     } catch (err) {
       debug('routes', `delete error: ${err.message}`)

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, watch, computed } from 'vue'
+import { ref, reactive, watch, computed, nextTick } from 'vue'
 import { api } from '../api.js'
 
 const emit = defineEmits(['close', 'saved'])
@@ -7,12 +7,21 @@ const emit = defineEmits(['close', 'saved'])
 // ── UI state ──────────────────────────────────────────────────────────────────
 const loading = ref(true)
 const saving = ref(false)
+const loaded = ref(false)
+const autoSaveStatus = ref(null) // null | 'saving' | 'saved' | 'error'
+let saveTimer = null
 const testing = ref(false)
 const testResult = ref(null)
+const testingStorage = ref(false)
+const storageTestResult = ref(null)
 const error = ref('')
 const changingPassword = ref(false)
 const passwordForm = reactive({ current: '', next: '', confirm: '' })
 const passwordResult = ref(null)
+const changingUsername = ref(false)
+const usernameForm = reactive({ current: '', newUsername: '' })
+const usernameResult = ref(null)
+const currentUsername = ref('admin')
 const activeTab = ref('connection')
 
 const TABS = [
@@ -97,7 +106,7 @@ function setRetentionMode(mode) {
 async function load() {
   loading.value = true
   try {
-    const s = await api.getSettings()
+    const [s, status] = await Promise.all([api.getSettings(), api.auth.status()])
     Object.assign(form.mealie, s.mealie)
     Object.assign(form.storage.local, s.storage.local)
     Object.assign(form.storage.s3, s.storage.s3)
@@ -110,11 +119,37 @@ async function load() {
       Object.assign(form.retention, s.retention)
       retentionMode.value = deriveRetentionMode()
     }
-    if (s.auth?.oidc)  Object.assign(form.auth.oidc, s.auth.oidc)
+    if (s.auth?.oidc) Object.assign(form.auth.oidc, s.auth.oidc)
+    currentUsername.value = status.username || 'admin'
   } catch (err) {
     error.value = `Failed to load settings: ${err.message}`
   } finally {
     loading.value = false
+    await nextTick()
+    loaded.value = true
+  }
+}
+
+watch(form, () => {
+  if (!loaded.value) return
+  clearTimeout(saveTimer)
+  autoSaveStatus.value = null
+  saveTimer = setTimeout(save, 800)
+}, { deep: true })
+
+async function testStorage() {
+  testingStorage.value = true
+  storageTestResult.value = null
+  try {
+    storageTestResult.value = await api.testStorage({
+      type: form.storage.type,
+      local: { ...form.storage.local },
+      s3: { ...form.storage.s3 },
+    })
+  } catch (err) {
+    storageTestResult.value = { ok: false, error: err.message }
+  } finally {
+    testingStorage.value = false
   }
 }
 
@@ -132,6 +167,7 @@ async function testConnection() {
 
 async function save() {
   saving.value = true
+  autoSaveStatus.value = 'saving'
   error.value = ''
   try {
     await api.saveSettings({
@@ -142,11 +178,32 @@ async function save() {
       auth:      { oidc: { ...form.auth.oidc } },
     })
     emit('saved')
-    emit('close')
+    autoSaveStatus.value = 'saved'
+    setTimeout(() => { if (autoSaveStatus.value === 'saved') autoSaveStatus.value = null }, 2000)
   } catch (err) {
     error.value = `Failed to save: ${err.message}`
+    autoSaveStatus.value = 'error'
   } finally {
     saving.value = false
+  }
+}
+
+async function changeUsername() {
+  usernameResult.value = null
+  if (!usernameForm.current || !usernameForm.newUsername.trim()) {
+    usernameResult.value = { ok: false, error: 'All fields are required' }
+    return
+  }
+  changingUsername.value = true
+  try {
+    await api.auth.changeUsername(usernameForm.current, usernameForm.newUsername.trim())
+    currentUsername.value = usernameForm.newUsername.trim()
+    Object.assign(usernameForm, { current: '', newUsername: '' })
+    usernameResult.value = { ok: true }
+  } catch (err) {
+    usernameResult.value = { ok: false, error: err.message }
+  } finally {
+    changingUsername.value = false
   }
 }
 
@@ -417,6 +474,33 @@ load()
                 <span class="text-sm text-zinc-300">Force path-style <span class="text-zinc-600">(required for MinIO)</span></span>
               </label>
             </div>
+
+            <!-- Storage test -->
+            <div v-if="form.storage.type !== 'none'" class="pt-1 border-t border-zinc-800 flex items-center gap-3">
+              <button
+                class="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 transition-colors disabled:opacity-50"
+                :disabled="testingStorage"
+                @click="testStorage"
+              >
+                <svg class="w-3.5 h-3.5" :class="{ 'animate-spin': testingStorage }" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+                </svg>
+                {{ testingStorage ? 'Testing…' : 'Test Storage' }}
+              </button>
+              <span
+                v-if="storageTestResult"
+                class="flex items-center gap-1.5 text-sm"
+                :class="storageTestResult.ok ? 'text-cyan-400' : 'text-red-400'"
+              >
+                <svg v-if="storageTestResult.ok" class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                </svg>
+                <svg v-else class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                {{ storageTestResult.ok ? 'Connected' : (storageTestResult.error || 'Failed') }}
+              </span>
+            </div>
           </div>
 
           <!-- ── Automation ──────────────────────────────────────────────────── -->
@@ -626,6 +710,60 @@ load()
             <template v-if="!form.auth.oidc.enabled">
             <div class="border-t border-zinc-800"></div>
 
+            <!-- Change username -->
+            <div class="space-y-4">
+              <div>
+                <p class="text-sm font-medium text-zinc-200">Change username</p>
+                <p class="text-xs text-zinc-600 mt-0.5">
+                  Currently signed in as <span class="text-zinc-400 font-mono">{{ currentUsername }}</span>
+                </p>
+              </div>
+
+              <div class="space-y-3">
+                <div class="grid grid-cols-2 gap-3">
+                  <div>
+                    <label class="block text-sm text-zinc-300 mb-1.5">New username</label>
+                    <input
+                      v-model="usernameForm.newUsername"
+                      type="text"
+                      class="w-full rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-cyan-500 transition-colors"
+                    />
+                  </div>
+                  <div>
+                    <label class="block text-sm text-zinc-300 mb-1.5">Current password</label>
+                    <input
+                      v-model="usernameForm.current"
+                      type="password"
+                      placeholder="Confirm with password"
+                      class="w-full rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-cyan-500 transition-colors"
+                    />
+                  </div>
+                </div>
+
+                <div class="flex items-center justify-between">
+                  <span
+                    v-if="usernameResult"
+                    class="flex items-center gap-1.5 text-sm"
+                    :class="usernameResult.ok ? 'text-cyan-400' : 'text-red-400'"
+                  >
+                    <svg v-if="usernameResult.ok" class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                    {{ usernameResult.ok ? 'Username updated' : usernameResult.error }}
+                  </span>
+                  <span v-else></span>
+
+                  <button
+                    class="rounded-lg px-4 py-2 text-sm font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 transition-colors disabled:opacity-50"
+                    :disabled="changingUsername"
+                    @click="changeUsername"
+                  >{{ changingUsername ? 'Updating…' : 'Update Username' }}</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="border-t border-zinc-800"></div>
+
             <!-- Change password -->
             <div class="space-y-4">
               <div>
@@ -692,17 +830,25 @@ load()
       </div>
 
       <!-- ── Footer ─────────────────────────────────────────────────────────── -->
-      <div class="flex-none px-5 py-4 border-t border-zinc-800 flex items-center justify-end gap-3">
+      <div class="flex-none px-5 py-4 border-t border-zinc-800 flex items-center justify-between">
+        <span class="flex items-center gap-1.5 text-xs">
+          <template v-if="autoSaveStatus === 'saving'">
+            <svg class="w-3.5 h-3.5 animate-spin text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+            </svg>
+            <span class="text-zinc-500">Saving…</span>
+          </template>
+          <template v-else-if="autoSaveStatus === 'saved'">
+            <svg class="w-3.5 h-3.5 text-cyan-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+            <span class="text-cyan-500">Saved</span>
+          </template>
+        </span>
         <button
           class="rounded-xl px-5 py-2 text-sm font-medium text-zinc-400 hover:text-zinc-200 bg-zinc-800 hover:bg-zinc-700 transition-colors"
           @click="emit('close')"
-        >Cancel</button>
-        <button
-          class="rounded-xl px-5 py-2 text-sm font-medium bg-cyan-600 hover:bg-cyan-500 text-white transition-colors disabled:opacity-50"
-          :disabled="saving"
-          data-testid="settings-save"
-          @click="save"
-        >{{ saving ? 'Saving…' : 'Save Settings' }}</button>
+        >Close</button>
       </div>
 
     </div><!-- end modal shell -->

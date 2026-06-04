@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { api } from './api.js'
-import StatusCard from './components/StatusCard.vue'
+import ServiceCard from './components/ServiceCard.vue'
 import BackupList from './components/BackupList.vue'
 import UploadModal from './components/UploadModal.vue'
 import SettingsModal from './components/SettingsModal.vue'
@@ -31,7 +31,7 @@ async function checkAuth() {
 
 function onAuthenticated() {
   authenticated.value = true
-  Promise.all([fetchConfig(), fetchSchedule(), fetchBackups()])
+  Promise.all([fetchSchedule(), fetchBackups()])
   startStatusPolling()
 }
 
@@ -68,48 +68,65 @@ function startStatusPolling() {
 // ── App state ─────────────────────────────────────────────────────────────────
 const backups = ref([])
 const loading = ref(true)
-const backing = ref(false)     // backing all
-const deleting = ref(null)     // "serviceId:id" key
+const backing = ref(false)           // backing all services
+const backingServiceId = ref(null)   // backing a single service
+const deleting = ref(null)           // "serviceId:id" key
 const uploading = ref(false)
 const showUpload = ref(false)
 const showSettings = ref(false)
-const configured = ref(true)
-const schedule = ref({ enabled: false, cron: '' })
 const toast = ref(null)
-const services = ref([])       // configured service list (for upload modal)
+const services = ref([])
+const schedules = ref([])
 
-// ── Service filter tab ────────────────────────────────────────────────────────
-const selectedServiceId = ref('all')
+// ── Drill-down navigation ─────────────────────────────────────────────────────
+const selectedService = ref(null)    // null = overview grid, else service object
 
-const filteredBackups = computed(() => {
-  if (selectedServiceId.value === 'all') return backups.value
-  return backups.value.filter(b => b.serviceId === selectedServiceId.value)
-})
+function selectService(id) {
+  selectedService.value = services.value.find(s => s.id === id) ?? null
+}
 
-const configuredServices = computed(() => {
-  // Unique services that appeared in backups (or had errors)
-  const seen = new Map()
-  for (const b of backups.value) {
-    if (b.serviceId && !seen.has(b.serviceId)) {
-      seen.set(b.serviceId, { id: b.serviceId, name: b.serviceName, type: b.serviceType })
-    }
-  }
-  return Array.from(seen.values())
-})
+// Backups for the currently selected service (detail view)
+const serviceBackups = computed(() =>
+  selectedService.value
+    ? backups.value.filter(b => b.serviceId === selectedService.value.id)
+    : []
+)
 
-// ── Stats ─────────────────────────────────────────────────────────────────────
-const validBackups = computed(() => backups.value.filter(b => !b.error))
+const serviceValidBackups = computed(() => serviceBackups.value.filter(b => !b.error))
 
-function totalSize(bs) {
-  const bytes = bs.reduce((sum, b) => {
-    const n = typeof b.size === 'number' ? b.size : 0
-    return sum + n
-  }, 0)
+// ── Stats helpers ─────────────────────────────────────────────────────────────
+function fmtSize(bs) {
+  const bytes = bs.reduce((s, b) => s + (typeof b.size === 'number' ? b.size : 0), 0)
   if (bytes === 0) return '—'
-  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`
-  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(1)} GB`
+  if (bytes >= 1048576)    return `${(bytes / 1048576).toFixed(1)} MB`
   return `${(bytes / 1024).toFixed(0)} KB`
 }
+
+function relTime(dateStr) {
+  const diff = Date.now() - new Date(dateStr).getTime()
+  const m = Math.floor(diff / 60000)
+  if (m < 1)  return 'just now'
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ago`
+  return `${Math.floor(h / 24)}d ago`
+}
+
+function latestBackup(bs) {
+  return bs.filter(b => b.time || b.date)
+    .sort((a, b) => new Date(b.time || b.date) - new Date(a.time || a.date))[0] ?? null
+}
+
+const TYPE_COLORS = {
+  radarr: 'bg-blue-500/15 text-blue-300', sonarr: 'bg-teal-500/15 text-teal-300',
+  prowlarr: 'bg-orange-500/15 text-orange-300', readarr: 'bg-green-500/15 text-green-300',
+  lidarr: 'bg-pink-500/15 text-pink-300', whisparr: 'bg-purple-500/15 text-purple-300',
+  bazarr: 'bg-yellow-500/15 text-yellow-300', seerr: 'bg-sky-500/15 text-sky-300',
+  overseerr: 'bg-sky-500/15 text-sky-300', jellyseerr: 'bg-sky-500/15 text-sky-300', // legacy
+  maintainerr: 'bg-indigo-500/15 text-indigo-300',
+}
+const typeBadge = (t) => TYPE_COLORS[t] || 'bg-zinc-500/15 text-zinc-400'
 
 // ── Data fetching ─────────────────────────────────────────────────────────────
 async function fetchBackups() {
@@ -122,20 +139,11 @@ async function fetchBackups() {
   }
 }
 
-async function fetchConfig() {
-  try {
-    const cfg = await api.getConfig()
-    configured.value = cfg.configured
-  } catch {
-    configured.value = false
-  }
-}
-
 async function fetchSchedule() {
   try {
     const s = await api.getSettings()
-    schedule.value = s.schedule
     services.value = s.services || []
+    schedules.value = s.schedules || []
   } catch {
     // non-critical
   }
@@ -157,6 +165,19 @@ async function triggerAllBackups() {
     toast.value?.add(`Backup failed: ${err.message}`, 'error')
   } finally {
     backing.value = false
+  }
+}
+
+async function triggerServiceBackup(serviceId) {
+  backingServiceId.value = serviceId
+  try {
+    await api.createBackup(serviceId)
+    toast.value?.add('Backup created')
+    await fetchBackups()
+  } catch (err) {
+    toast.value?.add(`Backup failed: ${err.message}`, 'error')
+  } finally {
+    backingServiceId.value = null
   }
 }
 
@@ -203,7 +224,10 @@ async function handleUpload(serviceId, file) {
 
 async function onSettingsSaved() {
   toast.value?.add('Settings saved')
-  await Promise.all([fetchConfig(), fetchSchedule(), fetchBackups()])
+  await Promise.all([fetchSchedule(), fetchBackups()])
+  if (selectedService.value) {
+    selectedService.value = services.value.find(s => s.id === selectedService.value.id) ?? null
+  }
   checkStatus()
 }
 
@@ -221,7 +245,7 @@ onMounted(async () => {
 
   await checkAuth()
   if (authenticated.value) {
-    await Promise.all([fetchConfig(), fetchSchedule(), fetchBackups()])
+    await Promise.all([fetchSchedule(), fetchBackups()])
     startStatusPolling()
   }
 })
@@ -255,21 +279,6 @@ onMounted(async () => {
         <LogoIcon :size="34" />
         <h1 class="text-base font-semibold text-zinc-100 leading-none">Arr Backup</h1>
 
-        <!-- Service status pills -->
-        <div class="flex items-center gap-1.5 flex-wrap">
-          <span
-            v-for="svc in serviceStatuses"
-            :key="svc.id"
-            class="hidden sm:flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-full transition-colors"
-            :class="svc.ok ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'"
-          >
-            <span
-              class="w-1.5 h-1.5 rounded-full"
-              :class="svc.ok ? 'bg-green-400 animate-pulse' : 'bg-red-400'"
-            ></span>
-            {{ svc.name }}
-          </span>
-        </div>
       </div>
 
       <div class="flex items-center gap-2">
@@ -299,7 +308,7 @@ onMounted(async () => {
 
         <button
           class="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium bg-violet-600 hover:bg-violet-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          :disabled="backing || !configured"
+          :disabled="backing || !services.length"
           data-testid="backup-now-button"
           @click="triggerAllBackups"
         >
@@ -328,86 +337,172 @@ onMounted(async () => {
       </div>
     </header>
 
-    <!-- Setup banner -->
-    <div
-      v-if="!configured"
-      class="mx-6 mt-4 rounded-xl bg-amber-900/30 border border-amber-800/50 px-4 py-3 flex items-center gap-3"
-      data-testid="setup-banner"
-    >
-      <svg class="w-4 h-4 text-amber-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
-      </svg>
-      <p class="text-sm text-amber-300">
-        No services configured yet.
-        <button class="underline hover:no-underline" @click="showSettings = true">Open Settings</button>
-        to add your Radarr, Sonarr, or other arr apps.
-      </p>
-    </div>
-
     <!-- Main content -->
-    <main class="max-w-5xl mx-auto px-6 py-8 space-y-6">
+    <main class="max-w-5xl mx-auto px-6 py-8">
 
-      <!-- Stat cards -->
-      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <StatusCard :backups="validBackups" :loading="loading" :schedule="schedule" />
+      <!-- ── Overview: service grid ── -->
+      <template v-if="!selectedService">
 
-        <div class="rounded-2xl bg-zinc-900 border border-zinc-800 p-6">
-          <div class="flex items-center gap-3 mb-4">
-            <div class="w-8 h-8 rounded-lg bg-blue-500/10 flex items-center justify-center">
-              <svg class="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5m6 4.125l2.25 2.25m0 0l2.25-2.25M12 15.375v-8.25" />
-              </svg>
-            </div>
-            <span class="text-sm font-medium text-zinc-400">Total Backups</span>
-          </div>
-          <p class="text-2xl font-semibold text-zinc-100" data-testid="total-count">
-            {{ loading ? '—' : validBackups.length }}
+        <!-- Empty: no services configured -->
+        <div v-if="!loading && !services.length" class="rounded-2xl bg-zinc-900 border border-zinc-800 px-6 py-16 text-center">
+          <svg class="w-10 h-10 mx-auto mb-3 text-zinc-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 14.25h13.5m-13.5 0a3 3 0 01-3-3m3 3a3 3 0 100 6h13.5a3 3 0 100-6m-16.5-3a3 3 0 013-3h13.5a3 3 0 013 3m-19.5 0a4.5 4.5 0 01.9-2.7L5.737 5.1a3.375 3.375 0 012.7-1.35h7.126c1.062 0 2.062.5 2.7 1.35l2.587 3.45a4.5 4.5 0 01.9 2.7m0 0a3 3 0 01-3 3m0 3h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008zm-3 6h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008z" />
+          </svg>
+          <p class="text-sm text-zinc-500">No services configured yet.</p>
+          <p class="text-xs text-zinc-600 mt-1">
+            <button class="text-violet-400 hover:text-violet-300 underline hover:no-underline" @click="showSettings = true">Open Settings</button>
+            to add your arr apps.
           </p>
         </div>
 
-        <div class="rounded-2xl bg-zinc-900 border border-zinc-800 p-6">
-          <div class="flex items-center gap-3 mb-4">
-            <div class="w-8 h-8 rounded-lg bg-violet-500/10 flex items-center justify-center">
-              <svg class="w-4 h-4 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
-              </svg>
+        <!-- Service cards grid -->
+        <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <!-- Skeletons while loading and service list not yet available -->
+          <template v-if="loading && !services.length">
+            <div v-for="i in 3" :key="i" class="rounded-2xl bg-zinc-900 border border-zinc-800 p-5 space-y-4 animate-pulse">
+              <div class="flex items-center gap-2">
+                <div class="h-5 w-14 bg-zinc-800 rounded"></div>
+                <div class="h-5 w-24 bg-zinc-800 rounded"></div>
+              </div>
+              <div class="space-y-1.5">
+                <div class="h-5 w-20 bg-zinc-800 rounded"></div>
+                <div class="h-3.5 w-32 bg-zinc-800 rounded"></div>
+              </div>
+              <div class="h-px bg-zinc-800"></div>
+              <div class="flex justify-between items-center">
+                <div class="h-3.5 w-20 bg-zinc-800 rounded"></div>
+                <div class="h-7 w-16 bg-zinc-800 rounded-lg"></div>
+              </div>
             </div>
-            <span class="text-sm font-medium text-zinc-400">Total Size</span>
-          </div>
-          <p class="text-2xl font-semibold text-zinc-100" data-testid="total-size">
-            <span v-if="loading">—</span>
-            <span v-else-if="validBackups.length">{{ totalSize(validBackups) }}</span>
-            <span v-else>0 MB</span>
-          </p>
+          </template>
+
+          <ServiceCard
+            v-for="svc in services"
+            :key="svc.id"
+            :service="svc"
+            :backups="backups.filter(b => b.serviceId === svc.id)"
+            :schedules="schedules"
+            :status="serviceStatuses.find(s => s.id === svc.id) ?? null"
+            :loading="loading"
+            :backing="backingServiceId === svc.id"
+            @select="selectService"
+            @backup="triggerServiceBackup"
+          />
         </div>
-      </div>
+      </template>
 
-      <!-- Service filter tabs -->
-      <div v-if="configuredServices.length > 1" class="flex items-center gap-2 flex-wrap">
-        <button
-          class="rounded-lg px-3 py-1.5 text-sm font-medium transition-colors"
-          :class="selectedServiceId === 'all' ? 'bg-violet-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'"
-          @click="selectedServiceId = 'all'"
-        >All</button>
-        <button
-          v-for="svc in configuredServices"
-          :key="svc.id"
-          class="rounded-lg px-3 py-1.5 text-sm font-medium capitalize transition-colors"
-          :class="selectedServiceId === svc.id ? 'bg-violet-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'"
-          @click="selectedServiceId = svc.id"
-        >
-          {{ svc.name }}
-        </button>
-      </div>
+      <!-- ── Detail: single service ── -->
+      <template v-else>
 
-      <BackupList
-        :backups="filteredBackups"
-        :loading="loading"
-        :deleting="deleting"
-        @download="downloadBackup"
-        @delete="deleteBackup"
-        @restore="restoreBackup"
-      />
+        <!-- Sub-header -->
+        <div class="flex items-center gap-3 mb-6 flex-wrap">
+          <!-- Back button -->
+          <button
+            class="flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
+            @click="selectedService = null"
+          >
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
+            </svg>
+            Services
+          </button>
+
+          <span class="text-zinc-700">/</span>
+
+          <!-- Service identity -->
+          <div class="flex items-center gap-2 flex-1 min-w-0">
+            <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium capitalize shrink-0" :class="typeBadge(selectedService.type)">
+              {{ selectedService.type }}
+            </span>
+            <h2 class="text-base font-semibold text-zinc-100 truncate">{{ selectedService.name }}</h2>
+            <!-- status -->
+            <div class="flex items-center gap-1 shrink-0">
+              <span class="w-1.5 h-1.5 rounded-full"
+                :class="serviceStatuses.find(s => s.id === selectedService.id)?.ok ? 'bg-green-400 animate-pulse' : 'bg-red-400'"></span>
+              <span class="text-xs hidden sm:block"
+                :class="serviceStatuses.find(s => s.id === selectedService.id)?.ok ? 'text-green-400' : 'text-red-400'">
+                {{ serviceStatuses.find(s => s.id === selectedService.id)?.ok ? 'Online' : 'Offline' }}
+              </span>
+            </div>
+          </div>
+
+          <!-- Detail actions -->
+          <div class="flex items-center gap-2 ml-auto">
+            <button
+              class="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium text-zinc-400 hover:text-zinc-200 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 transition-colors"
+              @click="showUpload = true"
+            >
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+              </svg>
+              Upload
+            </button>
+            <button
+              class="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium bg-violet-600 hover:bg-violet-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              :disabled="backingServiceId === selectedService.id"
+              @click="triggerServiceBackup(selectedService.id)"
+            >
+              <svg class="w-4 h-4" :class="{ 'animate-spin': backingServiceId === selectedService.id }" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5m8.25 3v6.75m0 0l-3-3m3 3l3-3M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" />
+              </svg>
+              {{ backingServiceId === selectedService.id ? 'Creating…' : 'Backup Now' }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Stat strip -->
+        <div class="grid grid-cols-3 gap-4 mb-6">
+          <div class="rounded-2xl bg-zinc-900 border border-zinc-800 p-5">
+            <p class="text-xs font-medium text-zinc-500 mb-2">Last Backup</p>
+            <div v-if="loading" class="h-6 w-20 bg-zinc-800 rounded animate-pulse"></div>
+            <template v-else>
+              <p class="text-lg font-semibold text-zinc-100">
+                {{ latestBackup(serviceValidBackups) ? relTime(latestBackup(serviceValidBackups).time || latestBackup(serviceValidBackups).date) : '—' }}
+              </p>
+            </template>
+          </div>
+          <div class="rounded-2xl bg-zinc-900 border border-zinc-800 p-5">
+            <p class="text-xs font-medium text-zinc-500 mb-2">Backups</p>
+            <div v-if="loading" class="h-6 w-10 bg-zinc-800 rounded animate-pulse"></div>
+            <p v-else class="text-lg font-semibold text-zinc-100">{{ serviceValidBackups.length }}</p>
+          </div>
+          <div class="rounded-2xl bg-zinc-900 border border-zinc-800 p-5">
+            <p class="text-xs font-medium text-zinc-500 mb-2">Total Size</p>
+            <div v-if="loading" class="h-6 w-16 bg-zinc-800 rounded animate-pulse"></div>
+            <p v-else class="text-lg font-semibold text-zinc-100">{{ fmtSize(serviceValidBackups) }}</p>
+          </div>
+        </div>
+
+        <!-- Schedule/retention info bar (if configured per-service) -->
+        <div v-if="selectedService.schedule?.enabled || selectedService.retention?.enabled" class="flex items-center gap-4 mb-4 px-1 flex-wrap">
+          <div v-if="selectedService.schedule?.enabled" class="flex items-center gap-1.5 text-xs text-zinc-500">
+            <svg class="w-3.5 h-3.5 text-zinc-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            {{ selectedService.schedule.cron }}
+          </div>
+          <div v-if="selectedService.retention?.enabled" class="flex items-center gap-1.5 text-xs text-zinc-500">
+            <svg class="w-3.5 h-3.5 text-zinc-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+            </svg>
+            Keep
+            <template v-if="selectedService.retention.keepLast > 0">last {{ selectedService.retention.keepLast }}</template>
+            <template v-if="selectedService.retention.keepLast > 0 && selectedService.retention.keepDays > 0"> / </template>
+            <template v-if="selectedService.retention.keepDays > 0">{{ selectedService.retention.keepDays }} days</template>
+          </div>
+        </div>
+
+        <BackupList
+          :backups="serviceBackups"
+          :loading="loading"
+          :deleting="deleting"
+          :detail="true"
+          @download="downloadBackup"
+          @delete="deleteBackup"
+          @restore="restoreBackup"
+        />
+      </template>
+
     </main>
 
     <UploadModal

@@ -11,6 +11,7 @@ const props = defineProps({
 
 const emit = defineEmits(['authenticated'])
 
+const username = ref('')
 const password = ref('')
 const confirm = ref('')
 const errorMsg = ref(props.error)
@@ -18,6 +19,10 @@ const loading = ref(false)
 
 async function submit() {
   errorMsg.value = ''
+  if (!username.value.trim()) {
+    errorMsg.value = 'Username is required'
+    return
+  }
   if (!password.value) {
     errorMsg.value = 'Password is required'
     return
@@ -29,9 +34,9 @@ async function submit() {
   loading.value = true
   try {
     if (!props.bootstrapped) {
-      await api.auth.bootstrap(password.value)
+      await api.auth.bootstrap(username.value.trim(), password.value)
     } else {
-      await api.auth.login(password.value)
+      await api.auth.login(username.value.trim(), password.value)
     }
     emit('authenticated')
   } catch (err) {
@@ -66,11 +71,24 @@ function loginWithOidc() {
 
         <div class="space-y-3">
           <div>
+            <label class="block text-sm text-zinc-400 mb-1.5">Username</label>
+            <input
+              v-model="username"
+              type="text"
+              :placeholder="bootstrapped ? 'Enter username' : 'Choose a username'"
+              autocomplete="username"
+              class="w-full rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-violet-500 transition-colors"
+              data-testid="login-username"
+              @keydown.enter="submit"
+            />
+          </div>
+          <div>
             <label class="block text-sm text-zinc-400 mb-1.5">Password</label>
             <input
               v-model="password"
               type="password"
               placeholder="Enter password"
+              autocomplete="current-password"
               class="w-full rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-violet-500 transition-colors"
               data-testid="login-password"
               @keydown.enter="submit"

@@ -8,36 +8,37 @@ function clearAll() {
   tasks.clear()
 }
 
-export function updateSchedules({ global: globalSchedule, services = [] }, { onGlobal, onService }, log) {
+// schedules: [{ id, name, enabled, cron, serviceId }]
+// serviceId = null/undefined → backup all services
+export function updateSchedules(schedules = [], { onGlobal, onService }, log) {
   clearAll()
 
-  if (globalSchedule?.enabled && globalSchedule?.cron) {
-    if (!cron.validate(globalSchedule.cron)) {
-      log?.warn(`Invalid global cron expression: ${globalSchedule.cron}`)
-    } else {
-      debug('scheduler', `starting global cron: "${globalSchedule.cron}"`)
-      tasks.set('__global__', cron.schedule(globalSchedule.cron, () => {
-        debug('scheduler', 'global cron fired')
-        onGlobal()
-      }))
-      log?.info(`Global backup scheduled: ${globalSchedule.cron}`)
-    }
-  } else {
-    debug('scheduler', 'global schedule disabled')
-  }
-
-  for (const service of services) {
-    if (!service.schedule?.enabled || !service.schedule?.cron) continue
-    if (!cron.validate(service.schedule.cron)) {
-      log?.warn(`Invalid cron for service ${service.name}: ${service.schedule.cron}`)
+  for (const schedule of schedules) {
+    if (!schedule.enabled || !schedule.cron) continue
+    if (!cron.validate(schedule.cron)) {
+      log?.warn(`Invalid cron for schedule "${schedule.name}": ${schedule.cron}`)
       continue
     }
-    const serviceId = service.id
-    debug('scheduler', `starting cron for service ${service.name}: "${service.schedule.cron}"`)
-    tasks.set(serviceId, cron.schedule(service.schedule.cron, () => {
-      debug('scheduler', `service cron fired for ${service.name}`)
-      onService(serviceId)
-    }))
-    log?.info(`${service.name} backup scheduled: ${service.schedule.cron}`)
+
+    const key = schedule.id
+    const serviceId = schedule.serviceId || null
+
+    const retention = schedule.retention || null
+
+    if (!serviceId) {
+      debug('scheduler', `global schedule "${schedule.name}": "${schedule.cron}"`)
+      tasks.set(key, cron.schedule(schedule.cron, () => {
+        debug('scheduler', `global schedule fired: "${schedule.name}"`)
+        onGlobal(retention)
+      }))
+      log?.info(`Scheduled (all services): "${schedule.name}" ${schedule.cron}`)
+    } else {
+      debug('scheduler', `service schedule "${schedule.name}" → ${serviceId}: "${schedule.cron}"`)
+      tasks.set(key, cron.schedule(schedule.cron, () => {
+        debug('scheduler', `service schedule fired: "${schedule.name}" → ${serviceId}`)
+        onService(serviceId, retention)
+      }))
+      log?.info(`Scheduled (${serviceId}): "${schedule.name}" ${schedule.cron}`)
+    }
   }
 }

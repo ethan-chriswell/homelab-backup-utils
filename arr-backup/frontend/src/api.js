@@ -17,15 +17,21 @@ export const api = {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(s),
   }),
+  testStorage: (storage) => request('/api/settings/test-storage', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ storage }),
+  }),
+
   testConnection: (serviceId) => request('/api/settings/test', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ serviceId }),
   }),
-  testConnectionPreview: (url, apiKey) => request('/api/settings/test', {
+  testConnectionPreview: (url, apiKey, type) => request('/api/settings/test', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url, apiKey }),
+    body: JSON.stringify({ url, apiKey, type }),
   }),
 
   listBackups: () => request('/api/backups'),
@@ -66,22 +72,28 @@ export const api = {
   auth: {
     status: () => request('/api/auth/status'),
 
-    bootstrap: (password) => request('/api/auth/bootstrap', {
+    bootstrap: (username, password) => request('/api/auth/bootstrap', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ username, password }),
     }),
 
-    login: (password) => request('/api/auth/login', {
+    login: (username, password) => request('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ username, password }),
     }),
 
     changePassword: (currentPassword, newPassword) => request('/api/auth/change-password', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+
+    changeUsername: (currentPassword, newUsername) => request('/api/auth/change-username', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ currentPassword, newUsername }),
     }),
 
     logout: () => request('/api/auth/logout', { method: 'POST' }),

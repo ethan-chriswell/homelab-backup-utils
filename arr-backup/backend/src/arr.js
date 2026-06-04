@@ -183,7 +183,7 @@ export function createMaintainerrClient(baseUrl) {
 
 export function createClient(type, url, apiKey) {
   if (type === 'bazarr') return createBazarrClient(url, apiKey)
-  if (type === 'overseerr' || type === 'jellyseerr') return createSeerrClient(url, apiKey)
+  if (type === 'seerr' || type === 'overseerr' || type === 'jellyseerr') return createSeerrClient(url, apiKey)
   if (type === 'maintainerr') return createMaintainerrClient(url)
   return createArrClient(url, apiKey)
 }

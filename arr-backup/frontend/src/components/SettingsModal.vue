@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, watch, computed } from 'vue'
+import { ref, reactive, watch, computed, nextTick } from 'vue'
 import { api } from '../api.js'
 
 const emit = defineEmits(['close', 'saved'])
@@ -7,12 +7,21 @@ const emit = defineEmits(['close', 'saved'])
 // ── UI state ──────────────────────────────────────────────────────────────────
 const loading = ref(true)
 const saving = ref(false)
+const loaded = ref(false)
+const autoSaveStatus = ref(null) // null | 'saving' | 'saved' | 'error'
+let saveTimer = null
 const testing = ref(false)
 const testResultMap = reactive({}) // serviceId → { ok, error }
+const testingStorage = ref(false)
+const storageTestResult = ref(null)
 const error = ref('')
 const changingPassword = ref(false)
 const passwordForm = reactive({ current: '', next: '', confirm: '' })
 const passwordResult = ref(null)
+const changingUsername = ref(false)
+const usernameForm = reactive({ current: '', newUsername: '' })
+const usernameResult = ref(null)
+const currentUsername = ref('admin')
 const activeTab = ref('services')
 
 // Inline add/edit service form
@@ -20,27 +29,15 @@ const showServiceForm = ref(false)
 const editingServiceId = ref(null)
 const serviceForm = reactive({
   name: '', type: 'radarr', url: '', apiKey: '',
-  schedule: { enabled: false, cron: '0 2 * * *' },
   retention: { enabled: false, keepLast: 10, keepDays: 0 },
 })
 
 // Service form test / advanced state
 const serviceFormTesting = ref(false)
 const serviceFormTestResult = ref(null)
-const showServiceAdvanced = ref(false)
-const serviceFormSchedulePreset = ref('0 2 * * *')
 const serviceFormRetentionMode = ref('off')
 
-const serviceFormActivePreset = computed(() => {
-  const match = PRESETS.find(p => p.cron !== 'custom' && p.cron === serviceFormSchedulePreset.value)
-  return match ? match.cron : 'custom'
-})
-
-watch(serviceFormSchedulePreset, (val) => {
-  if (val !== 'custom') serviceForm.schedule.cron = val
-})
-
-const SERVICE_TYPES = ['radarr', 'sonarr', 'prowlarr', 'readarr', 'lidarr', 'whisparr']
+const SERVICE_TYPES = ['radarr', 'sonarr', 'prowlarr', 'readarr', 'lidarr', 'whisparr', 'bazarr', 'seerr', 'maintainerr']
 
 const TABS = [
   { id: 'services',   label: 'Services' },
@@ -60,6 +57,7 @@ const PRESETS = [
 
 const form = reactive({
   services: [],
+  schedules: [],
   storage: {
     type: 'none',
     local: { path: '/data/backups' },
@@ -68,55 +66,81 @@ const form = reactive({
       accessKeyId: '', secretAccessKey: '', forcePathStyle: false,
     },
   },
-  schedule:  { enabled: false, cron: '0 2 * * *' },
-  retention: { enabled: false, keepLast: 10, keepDays: 0 },
   auth: {
     oidc: { enabled: false, issuer: '', clientId: '', clientSecret: '', redirectUri: '', scopes: 'openid profile email' },
   },
 })
 
-const schedulePreset = ref('0 2 * * *')
+// ── Schedule CRUD ─────────────────────────────────────────────────────────────
+const showScheduleForm = ref(false)
+const scheduleFormPreset = ref('0 2 * * *')
+const scheduleFormShowAdvanced = ref(false)
+const scheduleFormRetentionMode = ref('off')
+const scheduleForm = reactive({
+  name: '', serviceId: '', cron: '0 2 * * *',
+  retention: { enabled: false, keepLast: 10, keepDays: 0 },
+})
 
-const activePreset = computed(() => {
-  const match = PRESETS.find(p => p.cron !== 'custom' && p.cron === schedulePreset.value)
+const scheduleFormActivePreset = computed(() => {
+  const match = PRESETS.find(p => p.cron !== 'custom' && p.cron === scheduleFormPreset.value)
   return match ? match.cron : 'custom'
 })
 
-watch(schedulePreset, (val) => {
-  if (val !== 'custom') form.schedule.cron = val
+watch(scheduleFormPreset, (val) => {
+  if (val !== 'custom') scheduleForm.cron = val
 })
 
-// ── Retention mode ────────────────────────────────────────────────────────────
-const retentionMode = ref('off')
-
-function deriveRetentionMode() {
-  const { enabled, keepLast, keepDays } = form.retention
-  if (!enabled) return 'off'
-  if (keepLast > 0 && keepDays > 0) return 'both'
-  if (keepDays > 0) return 'age'
-  if (keepLast > 0) return 'count'
-  return 'off'
-}
-
-function setRetentionMode(mode) {
-  retentionMode.value = mode
+function setScheduleRetentionMode(mode) {
+  scheduleFormRetentionMode.value = mode
   if (mode === 'off') {
-    form.retention.enabled = false
-    form.retention.keepLast = 0
-    form.retention.keepDays = 0
+    scheduleForm.retention.enabled = false
+    scheduleForm.retention.keepLast = 0
+    scheduleForm.retention.keepDays = 0
   } else {
-    form.retention.enabled = true
+    scheduleForm.retention.enabled = true
     if (mode === 'count') {
-      form.retention.keepDays = 0
-      if (!form.retention.keepLast) form.retention.keepLast = 10
+      scheduleForm.retention.keepDays = 0
+      if (!scheduleForm.retention.keepLast) scheduleForm.retention.keepLast = 10
     } else if (mode === 'age') {
-      form.retention.keepLast = 0
-      if (!form.retention.keepDays) form.retention.keepDays = 30
+      scheduleForm.retention.keepLast = 0
+      if (!scheduleForm.retention.keepDays) scheduleForm.retention.keepDays = 30
     } else {
-      if (!form.retention.keepLast) form.retention.keepLast = 10
-      if (!form.retention.keepDays) form.retention.keepDays = 30
+      if (!scheduleForm.retention.keepLast) scheduleForm.retention.keepLast = 10
+      if (!scheduleForm.retention.keepDays) scheduleForm.retention.keepDays = 30
     }
   }
+}
+
+function openAddSchedule() {
+  Object.assign(scheduleForm, {
+    name: '', serviceId: '', cron: '0 2 * * *',
+    retention: { enabled: false, keepLast: 10, keepDays: 0 },
+  })
+  scheduleFormPreset.value = '0 2 * * *'
+  scheduleFormShowAdvanced.value = false
+  scheduleFormRetentionMode.value = 'off'
+  showScheduleForm.value = true
+}
+
+function saveScheduleForm() {
+  if (!scheduleForm.cron.trim()) return
+  form.schedules.push({
+    id: crypto.randomUUID(),
+    name: scheduleForm.name.trim() || scheduleForm.cron,
+    enabled: true,
+    cron: scheduleForm.cron.trim(),
+    serviceId: scheduleForm.serviceId || null,
+    retention: scheduleForm.retention.enabled ? { ...scheduleForm.retention } : null,
+  })
+  showScheduleForm.value = false
+}
+
+function removeSchedule(id) {
+  form.schedules = form.schedules.filter(s => s.id !== id)
+}
+
+function scheduledServiceName(serviceId) {
+  return form.services.find(s => s.id === serviceId)?.name || 'Unknown service'
 }
 
 // ── Service CRUD ──────────────────────────────────────────────────────────────
@@ -153,7 +177,7 @@ async function testServiceForm() {
   serviceFormTesting.value = true
   serviceFormTestResult.value = null
   try {
-    serviceFormTestResult.value = await api.testConnectionPreview(serviceForm.url, serviceForm.apiKey)
+    serviceFormTestResult.value = await api.testConnectionPreview(serviceForm.url, serviceForm.apiKey, serviceForm.type)
   } catch (err) {
     serviceFormTestResult.value = { ok: false, error: err.message }
   } finally {
@@ -165,13 +189,10 @@ function openAddService() {
   editingServiceId.value = null
   Object.assign(serviceForm, {
     name: '', type: 'radarr', url: '', apiKey: '',
-    schedule: { enabled: false, cron: '0 2 * * *' },
     retention: { enabled: false, keepLast: 10, keepDays: 0 },
   })
-  serviceFormSchedulePreset.value = '0 2 * * *'
   serviceFormRetentionMode.value = 'off'
   serviceFormTestResult.value = null
-  showServiceAdvanced.value = false
   showServiceForm.value = true
 }
 
@@ -179,13 +200,10 @@ function openEditService(svc) {
   editingServiceId.value = svc.id
   Object.assign(serviceForm, {
     name: svc.name, type: svc.type, url: svc.url, apiKey: svc.apiKey,
-    schedule: { ...(svc.schedule || { enabled: false, cron: '0 2 * * *' }) },
     retention: { ...(svc.retention || { enabled: false, keepLast: 10, keepDays: 0 }) },
   })
-  serviceFormSchedulePreset.value = PRESETS.find(p => p.cron !== 'custom' && p.cron === serviceForm.schedule.cron)?.cron || 'custom'
   serviceFormRetentionMode.value = deriveServiceRetentionMode(svc.retention)
   serviceFormTestResult.value = null
-  showServiceAdvanced.value = false
   showServiceForm.value = true
 }
 
@@ -201,7 +219,6 @@ function saveServiceForm() {
     type: serviceForm.type,
     url: serviceForm.url,
     apiKey: serviceForm.apiKey,
-    schedule: { ...serviceForm.schedule },
     retention: { ...serviceForm.retention },
   }
   if (editingServiceId.value) {
@@ -222,24 +239,43 @@ function removeService(id) {
 async function load() {
   loading.value = true
   try {
-    const s = await api.getSettings()
+    const [s, status] = await Promise.all([api.getSettings(), api.auth.status()])
     form.services = s.services || []
+    form.schedules = s.schedules || []
     Object.assign(form.storage.local, s.storage.local)
     Object.assign(form.storage.s3, s.storage.s3)
     form.storage.type = s.storage.type
-    form.schedule.enabled = s.schedule.enabled
-    form.schedule.cron = s.schedule.cron
-    const preset = PRESETS.find(p => p.cron !== 'custom' && p.cron === s.schedule.cron)
-    schedulePreset.value = preset ? preset.cron : 'custom'
-    if (s.retention) {
-      Object.assign(form.retention, s.retention)
-      retentionMode.value = deriveRetentionMode()
-    }
     if (s.auth?.oidc) Object.assign(form.auth.oidc, s.auth.oidc)
+    currentUsername.value = status.username || 'admin'
   } catch (err) {
     error.value = `Failed to load settings: ${err.message}`
   } finally {
     loading.value = false
+    await nextTick()
+    loaded.value = true
+  }
+}
+
+watch(form, () => {
+  if (!loaded.value) return
+  clearTimeout(saveTimer)
+  autoSaveStatus.value = null
+  saveTimer = setTimeout(save, 800)
+}, { deep: true })
+
+async function testStorage() {
+  testingStorage.value = true
+  storageTestResult.value = null
+  try {
+    storageTestResult.value = await api.testStorage({
+      type: form.storage.type,
+      local: { ...form.storage.local },
+      s3: { ...form.storage.s3 },
+    })
+  } catch (err) {
+    storageTestResult.value = { ok: false, error: err.message }
+  } finally {
+    testingStorage.value = false
   }
 }
 
@@ -257,19 +293,23 @@ async function testConnection(serviceId) {
 
 async function save() {
   saving.value = true
+  autoSaveStatus.value = 'saving'
   error.value = ''
   try {
     await api.saveSettings({
       services:  form.services,
+      schedules: form.schedules,
       storage:   { type: form.storage.type, local: { ...form.storage.local }, s3: { ...form.storage.s3 } },
-      schedule:  { ...form.schedule },
-      retention: { ...form.retention },
+      schedule:  { enabled: false, cron: '0 2 * * *' },
+      retention: { enabled: false, keepLast: 0, keepDays: 0 },
       auth:      { oidc: { ...form.auth.oidc } },
     })
     emit('saved')
-    emit('close')
+    autoSaveStatus.value = 'saved'
+    setTimeout(() => { if (autoSaveStatus.value === 'saved') autoSaveStatus.value = null }, 2000)
   } catch (err) {
     error.value = `Failed to save: ${err.message}`
+    autoSaveStatus.value = 'error'
   } finally {
     saving.value = false
   }
@@ -297,14 +337,38 @@ async function changePassword() {
   }
 }
 
+async function changeUsername() {
+  usernameResult.value = null
+  if (!usernameForm.current || !usernameForm.newUsername.trim()) {
+    usernameResult.value = { ok: false, error: 'All fields are required' }
+    return
+  }
+  changingUsername.value = true
+  try {
+    await api.auth.changeUsername(usernameForm.current, usernameForm.newUsername.trim())
+    currentUsername.value = usernameForm.newUsername.trim()
+    Object.assign(usernameForm, { current: '', newUsername: '' })
+    usernameResult.value = { ok: true }
+  } catch (err) {
+    usernameResult.value = { ok: false, error: err.message }
+  } finally {
+    changingUsername.value = false
+  }
+}
+
 // Type badge colors (matching BackupList)
 const TYPE_COLORS = {
-  radarr:   'bg-blue-500/15 text-blue-300',
-  sonarr:   'bg-teal-500/15 text-teal-300',
-  prowlarr: 'bg-orange-500/15 text-orange-300',
-  readarr:  'bg-green-500/15 text-green-300',
-  lidarr:   'bg-pink-500/15 text-pink-300',
-  whisparr: 'bg-purple-500/15 text-purple-300',
+  radarr:      'bg-blue-500/15 text-blue-300',
+  sonarr:      'bg-teal-500/15 text-teal-300',
+  prowlarr:    'bg-orange-500/15 text-orange-300',
+  readarr:     'bg-green-500/15 text-green-300',
+  lidarr:      'bg-pink-500/15 text-pink-300',
+  whisparr:    'bg-purple-500/15 text-purple-300',
+  bazarr:      'bg-yellow-500/15 text-yellow-300',
+  seerr:       'bg-sky-500/15 text-sky-300',
+  overseerr:   'bg-sky-500/15 text-sky-300',   // legacy
+  jellyseerr:  'bg-sky-500/15 text-sky-300',   // legacy
+  maintainerr: 'bg-indigo-500/15 text-indigo-300',
 }
 
 function typeBadge(type) {
@@ -426,10 +490,9 @@ load()
                 <div class="flex-1 min-w-0">
                   <p class="text-sm font-medium text-zinc-200 truncate">{{ svc.name }}</p>
                   <p class="text-xs text-zinc-500 truncate">{{ svc.url }}</p>
-                  <div v-if="svc.schedule?.enabled || svc.retention?.enabled" class="flex items-center gap-2 mt-0.5">
-                    <span v-if="svc.schedule?.enabled" class="text-xs text-violet-400/70">{{ svc.schedule.cron }}</span>
-                    <span v-if="svc.retention?.enabled" class="text-xs text-zinc-600">
-                      {{ svc.retention.keepLast > 0 && svc.retention.keepDays > 0 ? `keep ${svc.retention.keepLast} / ${svc.retention.keepDays}d` : svc.retention.keepLast > 0 ? `keep ${svc.retention.keepLast}` : `${svc.retention.keepDays}d` }}
+                  <div v-if="svc.retention?.enabled" class="mt-0.5">
+                    <span class="text-xs text-zinc-600">
+                      {{ svc.retention.keepLast > 0 && svc.retention.keepDays > 0 ? `keep ${svc.retention.keepLast} / ${svc.retention.keepDays}d` : svc.retention.keepLast > 0 ? `keep last ${svc.retention.keepLast}` : `keep ${svc.retention.keepDays}d` }}
                     </span>
                   </div>
                 </div>
@@ -534,94 +597,43 @@ load()
                 />
               </div>
 
-              <!-- Schedule & Retention -->
-              <div class="border-t border-zinc-700/50 pt-2.5">
-                <button
-                  type="button"
-                  class="flex items-center gap-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-300 transition-colors w-full"
-                  @click="showServiceAdvanced = !showServiceAdvanced"
-                >
-                  <svg class="w-3 h-3 transition-transform shrink-0" :class="showServiceAdvanced ? 'rotate-90' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
-                  </svg>
-                  Schedule &amp; Retention
-                  <span v-if="serviceForm.schedule.enabled || serviceForm.retention.enabled" class="ml-1 w-1.5 h-1.5 rounded-full bg-violet-500 shrink-0"></span>
-                </button>
-
-                <div v-if="showServiceAdvanced" class="mt-3 space-y-4">
-                  <!-- Schedule -->
-                  <div class="space-y-2">
-                    <div class="flex items-center justify-between">
-                      <p class="text-xs font-medium text-zinc-400">Schedule</p>
-                      <button
-                        type="button"
-                        class="relative w-8 h-4 rounded-full transition-colors shrink-0"
-                        :class="serviceForm.schedule.enabled ? 'bg-violet-600' : 'bg-zinc-700'"
-                        @click="serviceForm.schedule.enabled = !serviceForm.schedule.enabled"
-                      >
-                        <span class="absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white transition-transform" :class="serviceForm.schedule.enabled ? 'translate-x-4' : 'translate-x-0'"></span>
-                      </button>
-                    </div>
-                    <div v-if="serviceForm.schedule.enabled" class="space-y-2">
-                      <div class="flex flex-wrap gap-1.5">
-                        <button
-                          v-for="p in PRESETS"
-                          :key="p.cron"
-                          type="button"
-                          class="rounded px-2 py-1 text-xs font-medium transition-colors"
-                          :class="serviceFormActivePreset === p.cron ? 'bg-violet-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'"
-                          @click="serviceFormSchedulePreset = p.cron"
-                        >{{ p.label }}</button>
-                      </div>
-                      <input
-                        v-model="serviceForm.schedule.cron"
-                        type="text"
-                        placeholder="0 2 * * *"
-                        class="w-full rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-1.5 text-xs font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-violet-500 transition-colors"
-                        @input="serviceFormSchedulePreset = 'custom'"
-                      />
-                    </div>
+              <!-- Retention -->
+              <div class="border-t border-zinc-700/50 pt-3 space-y-2">
+                <label class="block text-xs text-zinc-400">Retention</label>
+                <div class="flex rounded-lg overflow-hidden border border-zinc-700">
+                  <button
+                    v-for="mode in ['off', 'count', 'age', 'both']"
+                    :key="mode"
+                    type="button"
+                    class="flex-1 py-1.5 text-xs font-medium transition-colors"
+                    :class="serviceFormRetentionMode === mode ? 'bg-zinc-700 text-zinc-100' : 'bg-zinc-800 text-zinc-500 hover:text-zinc-300'"
+                    @click="setServiceRetentionMode(mode)"
+                  >{{ { off: 'Off', count: 'Last N', age: 'N days', both: 'Both' }[mode] }}</button>
+                </div>
+                <div v-if="serviceFormRetentionMode === 'count'" class="flex items-center gap-2">
+                  <span class="text-xs text-zinc-400">Keep last</span>
+                  <input v-model.number="serviceForm.retention.keepLast" type="number" min="1"
+                    class="w-16 rounded bg-zinc-800 border border-zinc-700 px-2 py-1 text-xs text-zinc-100 focus:outline-none focus:border-violet-500 transition-colors" />
+                  <span class="text-xs text-zinc-400">backups</span>
+                </div>
+                <div v-else-if="serviceFormRetentionMode === 'age'" class="flex items-center gap-2">
+                  <span class="text-xs text-zinc-400">Keep last</span>
+                  <input v-model.number="serviceForm.retention.keepDays" type="number" min="1"
+                    class="w-16 rounded bg-zinc-800 border border-zinc-700 px-2 py-1 text-xs text-zinc-100 focus:outline-none focus:border-violet-500 transition-colors" />
+                  <span class="text-xs text-zinc-400">days</span>
+                </div>
+                <div v-else-if="serviceFormRetentionMode === 'both'" class="space-y-1.5">
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs text-zinc-400 w-20 shrink-0">Keep last</span>
+                    <input v-model.number="serviceForm.retention.keepLast" type="number" min="1"
+                      class="w-16 rounded bg-zinc-800 border border-zinc-700 px-2 py-1 text-xs text-zinc-100 focus:outline-none focus:border-violet-500 transition-colors" />
+                    <span class="text-xs text-zinc-400">backups</span>
                   </div>
-
-                  <!-- Retention -->
-                  <div class="space-y-2">
-                    <p class="text-xs font-medium text-zinc-400">Retention</p>
-                    <div class="flex rounded-lg overflow-hidden border border-zinc-700">
-                      <button
-                        v-for="mode in ['off', 'count', 'age', 'both']"
-                        :key="mode"
-                        type="button"
-                        class="flex-1 py-1.5 text-xs font-medium transition-colors"
-                        :class="serviceFormRetentionMode === mode ? 'bg-zinc-700 text-zinc-100' : 'bg-zinc-800 text-zinc-500 hover:text-zinc-300'"
-                        @click="setServiceRetentionMode(mode)"
-                      >{{ { off: 'Off', count: 'Last N', age: 'N days', both: 'Both' }[mode] }}</button>
-                    </div>
-                    <div v-if="serviceFormRetentionMode === 'count'" class="flex items-center gap-2">
-                      <span class="text-xs text-zinc-400">Keep last</span>
-                      <input v-model.number="serviceForm.retention.keepLast" type="number" min="1"
-                        class="w-16 rounded bg-zinc-800 border border-zinc-700 px-2 py-1 text-xs text-zinc-100 focus:outline-none focus:border-violet-500 transition-colors" />
-                      <span class="text-xs text-zinc-400">backups</span>
-                    </div>
-                    <div v-else-if="serviceFormRetentionMode === 'age'" class="flex items-center gap-2">
-                      <span class="text-xs text-zinc-400">Keep last</span>
-                      <input v-model.number="serviceForm.retention.keepDays" type="number" min="1"
-                        class="w-16 rounded bg-zinc-800 border border-zinc-700 px-2 py-1 text-xs text-zinc-100 focus:outline-none focus:border-violet-500 transition-colors" />
-                      <span class="text-xs text-zinc-400">days</span>
-                    </div>
-                    <div v-else-if="serviceFormRetentionMode === 'both'" class="space-y-1.5">
-                      <div class="flex items-center gap-2">
-                        <span class="text-xs text-zinc-400 w-20 shrink-0">Keep last</span>
-                        <input v-model.number="serviceForm.retention.keepLast" type="number" min="1"
-                          class="w-16 rounded bg-zinc-800 border border-zinc-700 px-2 py-1 text-xs text-zinc-100 focus:outline-none focus:border-violet-500 transition-colors" />
-                        <span class="text-xs text-zinc-400">backups</span>
-                      </div>
-                      <div class="flex items-center gap-2">
-                        <span class="text-xs text-zinc-400 w-20 shrink-0">…or last</span>
-                        <input v-model.number="serviceForm.retention.keepDays" type="number" min="1"
-                          class="w-16 rounded bg-zinc-800 border border-zinc-700 px-2 py-1 text-xs text-zinc-100 focus:outline-none focus:border-violet-500 transition-colors" />
-                        <span class="text-xs text-zinc-400">days</span>
-                      </div>
-                    </div>
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs text-zinc-400 w-20 shrink-0">…or last</span>
+                    <input v-model.number="serviceForm.retention.keepDays" type="number" min="1"
+                      class="w-16 rounded bg-zinc-800 border border-zinc-700 px-2 py-1 text-xs text-zinc-100 focus:outline-none focus:border-violet-500 transition-colors" />
+                    <span class="text-xs text-zinc-400">days</span>
                   </div>
                 </div>
               </div>
@@ -775,144 +787,212 @@ load()
                 <span class="text-sm text-zinc-300">Force path-style <span class="text-zinc-600">(required for MinIO)</span></span>
               </label>
             </div>
+
+            <!-- Storage test -->
+            <div v-if="form.storage.type !== 'none'" class="pt-1 border-t border-zinc-800 flex items-center gap-3">
+              <button
+                class="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 transition-colors disabled:opacity-50"
+                :disabled="testingStorage"
+                @click="testStorage"
+              >
+                <svg class="w-3.5 h-3.5" :class="{ 'animate-spin': testingStorage }" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+                </svg>
+                {{ testingStorage ? 'Testing…' : 'Test Storage' }}
+              </button>
+              <span
+                v-if="storageTestResult"
+                class="flex items-center gap-1.5 text-sm"
+                :class="storageTestResult.ok ? 'text-violet-400' : 'text-red-400'"
+              >
+                <svg v-if="storageTestResult.ok" class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                </svg>
+                <svg v-else class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                {{ storageTestResult.ok ? 'Connected' : (storageTestResult.error || 'Failed') }}
+              </span>
+            </div>
           </div>
 
           <!-- ── Automation ──────────────────────────────────────────────────── -->
-          <div v-if="activeTab === 'automation'" class="p-6 space-y-6">
+          <div v-if="activeTab === 'automation'" class="p-6 space-y-4">
+            <p class="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Schedules</p>
 
-            <!-- Schedule -->
-            <div class="space-y-4">
-              <div class="flex items-center justify-between">
-                <div>
-                  <p class="text-sm font-medium text-zinc-200">Backup schedule</p>
-                  <p class="text-xs text-zinc-600 mt-0.5">Automatically back up all services on a cron schedule</p>
+            <!-- Schedule list -->
+            <div v-if="form.schedules.length" class="space-y-2">
+              <div
+                v-for="sched in form.schedules"
+                :key="sched.id"
+                class="flex items-center gap-3 rounded-xl bg-zinc-800/50 border border-zinc-700/50 px-4 py-3"
+              >
+                <div class="flex-1 min-w-0">
+                  <p class="text-sm font-medium text-zinc-200 truncate">{{ sched.name }}</p>
+                  <p class="text-xs text-zinc-500 mt-0.5 font-mono">
+                    {{ sched.serviceId ? scheduledServiceName(sched.serviceId) : 'All services' }}
+                    <span class="text-zinc-700 mx-1">·</span>
+                    {{ sched.cron }}
+                  </p>
                 </div>
+                <!-- Enable toggle -->
                 <button
-                  class="relative w-10 h-5 rounded-full transition-colors shrink-0"
-                  :class="form.schedule.enabled ? 'bg-violet-600' : 'bg-zinc-700'"
-                  data-testid="schedule-toggle"
-                  @click="form.schedule.enabled = !form.schedule.enabled"
+                  class="relative w-8 h-4 rounded-full transition-colors shrink-0"
+                  :class="sched.enabled ? 'bg-violet-600' : 'bg-zinc-700'"
+                  @click="sched.enabled = !sched.enabled"
                 >
-                  <span
-                    class="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform"
-                    :class="form.schedule.enabled ? 'translate-x-5' : 'translate-x-0'"
-                  ></span>
+                  <span class="absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white transition-transform" :class="sched.enabled ? 'translate-x-4' : 'translate-x-0'"></span>
+                </button>
+                <!-- Delete -->
+                <button
+                  class="p-1.5 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-zinc-700 transition-colors shrink-0"
+                  title="Remove schedule"
+                  @click="removeSchedule(sched.id)"
+                >
+                  <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                  </svg>
                 </button>
               </div>
+            </div>
 
-              <div v-if="form.schedule.enabled" class="space-y-3">
-                <div class="flex flex-wrap gap-2">
+            <!-- Empty state -->
+            <div v-else-if="!showScheduleForm" class="rounded-xl bg-zinc-800/30 border border-zinc-700/30 px-4 py-6 text-center">
+              <p class="text-sm text-zinc-500">No schedules yet.</p>
+              <p class="text-xs text-zinc-600 mt-1">Add a schedule to automatically back up services.</p>
+            </div>
+
+            <!-- Add schedule inline form -->
+            <div v-if="showScheduleForm" class="rounded-xl bg-zinc-800/50 border border-zinc-700/50 p-4 space-y-3">
+              <p class="text-sm font-medium text-zinc-200">New Schedule</p>
+
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-xs text-zinc-400 mb-1">Name</label>
+                  <input
+                    v-model="scheduleForm.name"
+                    type="text"
+                    placeholder="Daily backup"
+                    class="w-full rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-violet-500 transition-colors"
+                  />
+                </div>
+                <div>
+                  <label class="block text-xs text-zinc-400 mb-1">Target</label>
+                  <select
+                    v-model="scheduleForm.serviceId"
+                    class="w-full rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-violet-500 transition-colors"
+                  >
+                    <option value="">All services</option>
+                    <option v-for="svc in form.services" :key="svc.id" :value="svc.id">{{ svc.name }}</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label class="block text-xs text-zinc-400 mb-1">Schedule</label>
+                <div class="flex flex-wrap gap-1.5 mb-2">
                   <button
                     v-for="p in PRESETS"
                     :key="p.cron"
-                    class="rounded-lg px-3 py-1.5 text-xs font-medium transition-colors"
-                    :class="activePreset === p.cron ? 'bg-violet-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'"
-                    :data-testid="`schedule-preset-${p.cron}`"
-                    @click="schedulePreset = p.cron"
+                    type="button"
+                    class="rounded px-2 py-1 text-xs font-medium transition-colors"
+                    :class="scheduleFormActivePreset === p.cron ? 'bg-violet-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'"
+                    @click="scheduleFormPreset = p.cron"
                   >{{ p.label }}</button>
                 </div>
-                <div>
-                  <label class="block text-sm text-zinc-300 mb-1.5">Cron expression</label>
-                  <input
-                    v-model="form.schedule.cron"
-                    type="text"
-                    placeholder="0 2 * * *"
-                    class="w-full rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-violet-500 transition-colors"
-                    data-testid="settings-cron-input"
-                    @input="schedulePreset = 'custom'"
-                  />
-                  <p class="text-xs text-zinc-600 mt-1">minute · hour · day · month · weekday</p>
-                </div>
-              </div>
-            </div>
-
-            <div class="border-t border-zinc-800"></div>
-
-            <!-- Retention -->
-            <div class="space-y-4">
-              <div>
-                <p class="text-sm font-medium text-zinc-200">Retention policy</p>
-                <p class="text-xs text-zinc-600 mt-0.5">Automatically remove old backups after each run (applied per service)</p>
+                <input
+                  v-model="scheduleForm.cron"
+                  type="text"
+                  placeholder="0 2 * * *"
+                  class="w-full rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-violet-500 transition-colors"
+                  @input="scheduleFormPreset = 'custom'"
+                />
+                <p class="text-xs text-zinc-600 mt-1">minute · hour · day · month · weekday</p>
               </div>
 
-              <!-- Mode selector -->
-              <div class="flex rounded-lg overflow-hidden border border-zinc-700" data-testid="retention-mode-selector">
+              <!-- Advanced settings -->
+              <div class="border-t border-zinc-700/50 pt-3">
                 <button
-                  v-for="mode in ['off', 'count', 'age', 'both']"
-                  :key="mode"
-                  class="flex-1 py-2 text-xs font-medium transition-colors"
-                  :class="retentionMode === mode ? 'bg-zinc-700 text-zinc-100' : 'bg-zinc-800 text-zinc-500 hover:text-zinc-300'"
-                  :data-testid="`retention-mode-${mode}`"
-                  @click="setRetentionMode(mode)"
-                >{{ { off: 'Off', count: 'Last N', age: 'N days', both: 'Both' }[mode] }}</button>
-              </div>
+                  type="button"
+                  class="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                  @click="scheduleFormShowAdvanced = !scheduleFormShowAdvanced"
+                >
+                  <svg class="w-3 h-3 transition-transform shrink-0" :class="scheduleFormShowAdvanced ? 'rotate-90' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+                  </svg>
+                  Advanced settings
+                </button>
 
-              <!-- Off -->
-              <div v-if="retentionMode === 'off'" class="rounded-lg bg-zinc-800/50 border border-zinc-700/50 px-4 py-3">
-                <p class="text-sm text-zinc-500">Backups accumulate indefinitely. No automatic cleanup.</p>
-              </div>
-
-              <!-- Count -->
-              <div v-else-if="retentionMode === 'count'" class="space-y-2">
-                <div class="flex items-center gap-3">
-                  <label class="text-sm text-zinc-400 shrink-0">Keep the last</label>
-                  <input
-                    v-model.number="form.retention.keepLast"
-                    type="number"
-                    min="1"
-                    class="w-20 rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-violet-500 transition-colors"
-                    data-testid="retention-keep-last"
-                  />
-                  <span class="text-sm text-zinc-400">backups per service</span>
-                </div>
-                <p class="text-xs text-zinc-600">Older backups are deleted after each run.</p>
-              </div>
-
-              <!-- Age -->
-              <div v-else-if="retentionMode === 'age'" class="space-y-2">
-                <div class="flex items-center gap-3">
-                  <label class="text-sm text-zinc-400 shrink-0">Keep backups from the last</label>
-                  <input
-                    v-model.number="form.retention.keepDays"
-                    type="number"
-                    min="1"
-                    class="w-20 rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-violet-500 transition-colors"
-                    data-testid="retention-keep-days"
-                  />
-                  <span class="text-sm text-zinc-400">days</span>
-                </div>
-                <p class="text-xs text-zinc-600">Backups older than this are deleted after each run.</p>
-              </div>
-
-              <!-- Both -->
-              <div v-else class="space-y-3">
-                <div class="space-y-2">
-                  <div class="flex items-center gap-3">
-                    <label class="text-sm text-zinc-400 w-36 shrink-0">Keep the last</label>
-                    <input
-                      v-model.number="form.retention.keepLast"
-                      type="number"
-                      min="1"
-                      class="w-20 rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-violet-500 transition-colors"
-                      data-testid="retention-keep-last"
-                    />
-                    <span class="text-sm text-zinc-400">backups</span>
+                <div v-if="scheduleFormShowAdvanced" class="mt-3 space-y-2">
+                  <div>
+                    <label class="block text-xs text-zinc-400 mb-0.5">Retention</label>
+                    <p class="text-xs text-zinc-600 mb-2">Overrides per-service retention for backups triggered by this schedule.</p>
                   </div>
-                  <div class="flex items-center gap-3">
-                    <label class="text-sm text-zinc-400 w-36 shrink-0">…or the last</label>
-                    <input
-                      v-model.number="form.retention.keepDays"
-                      type="number"
-                      min="1"
-                      class="w-20 rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:border-violet-500 transition-colors"
-                      data-testid="retention-keep-days"
-                    />
-                    <span class="text-sm text-zinc-400">days</span>
+                  <div class="flex rounded-lg overflow-hidden border border-zinc-700">
+                    <button
+                      v-for="mode in ['off', 'count', 'age', 'both']"
+                      :key="mode"
+                      type="button"
+                      class="flex-1 py-1.5 text-xs font-medium transition-colors"
+                      :class="scheduleFormRetentionMode === mode ? 'bg-zinc-700 text-zinc-100' : 'bg-zinc-800 text-zinc-500 hover:text-zinc-300'"
+                      @click="setScheduleRetentionMode(mode)"
+                    >{{ { off: 'Off', count: 'Last N', age: 'N days', both: 'Both' }[mode] }}</button>
+                  </div>
+                  <div v-if="scheduleFormRetentionMode === 'count'" class="flex items-center gap-2">
+                    <span class="text-xs text-zinc-400">Keep last</span>
+                    <input v-model.number="scheduleForm.retention.keepLast" type="number" min="1"
+                      class="w-16 rounded bg-zinc-800 border border-zinc-700 px-2 py-1 text-xs text-zinc-100 focus:outline-none focus:border-violet-500 transition-colors" />
+                    <span class="text-xs text-zinc-400">backups</span>
+                  </div>
+                  <div v-else-if="scheduleFormRetentionMode === 'age'" class="flex items-center gap-2">
+                    <span class="text-xs text-zinc-400">Keep last</span>
+                    <input v-model.number="scheduleForm.retention.keepDays" type="number" min="1"
+                      class="w-16 rounded bg-zinc-800 border border-zinc-700 px-2 py-1 text-xs text-zinc-100 focus:outline-none focus:border-violet-500 transition-colors" />
+                    <span class="text-xs text-zinc-400">days</span>
+                  </div>
+                  <div v-else-if="scheduleFormRetentionMode === 'both'" class="space-y-1.5">
+                    <div class="flex items-center gap-2">
+                      <span class="text-xs text-zinc-400 w-20 shrink-0">Keep last</span>
+                      <input v-model.number="scheduleForm.retention.keepLast" type="number" min="1"
+                        class="w-16 rounded bg-zinc-800 border border-zinc-700 px-2 py-1 text-xs text-zinc-100 focus:outline-none focus:border-violet-500 transition-colors" />
+                      <span class="text-xs text-zinc-400">backups</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <span class="text-xs text-zinc-400 w-20 shrink-0">…or last</span>
+                      <input v-model.number="scheduleForm.retention.keepDays" type="number" min="1"
+                        class="w-16 rounded bg-zinc-800 border border-zinc-700 px-2 py-1 text-xs text-zinc-100 focus:outline-none focus:border-violet-500 transition-colors" />
+                      <span class="text-xs text-zinc-400">days</span>
+                    </div>
                   </div>
                 </div>
-                <p class="text-xs text-zinc-600">A backup is kept if either rule protects it.</p>
+              </div>
+
+              <div class="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  class="flex-1 rounded-lg py-2 text-sm font-medium text-zinc-400 hover:text-zinc-200 bg-zinc-800 hover:bg-zinc-700 transition-colors"
+                  @click="showScheduleForm = false"
+                >Cancel</button>
+                <button
+                  type="button"
+                  class="flex-1 rounded-lg py-2 text-sm font-medium bg-violet-600 hover:bg-violet-500 text-white transition-colors disabled:opacity-40"
+                  :disabled="!scheduleForm.cron.trim()"
+                  @click="saveScheduleForm"
+                >Add</button>
               </div>
             </div>
+
+            <!-- Add Schedule button -->
+            <button
+              v-if="!showScheduleForm"
+              class="flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium text-violet-400 hover:text-violet-300 bg-violet-500/10 hover:bg-violet-500/15 border border-violet-500/20 transition-colors"
+              @click="openAddSchedule"
+            >
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+              </svg>
+              Add Schedule
+            </button>
           </div>
 
           <!-- ── Security ────────────────────────────────────────────────────── -->
@@ -984,6 +1064,60 @@ load()
             <template v-if="!form.auth.oidc.enabled">
             <div class="border-t border-zinc-800"></div>
 
+            <!-- Change username -->
+            <div class="space-y-4">
+              <div>
+                <p class="text-sm font-medium text-zinc-200">Change username</p>
+                <p class="text-xs text-zinc-600 mt-0.5">
+                  Currently signed in as <span class="text-zinc-400 font-mono">{{ currentUsername }}</span>
+                </p>
+              </div>
+
+              <div class="space-y-3">
+                <div class="grid grid-cols-2 gap-3">
+                  <div>
+                    <label class="block text-sm text-zinc-300 mb-1.5">New username</label>
+                    <input
+                      v-model="usernameForm.newUsername"
+                      type="text"
+                      class="w-full rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-violet-500 transition-colors"
+                    />
+                  </div>
+                  <div>
+                    <label class="block text-sm text-zinc-300 mb-1.5">Current password</label>
+                    <input
+                      v-model="usernameForm.current"
+                      type="password"
+                      placeholder="Confirm with password"
+                      class="w-full rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-violet-500 transition-colors"
+                    />
+                  </div>
+                </div>
+
+                <div class="flex items-center justify-between">
+                  <span
+                    v-if="usernameResult"
+                    class="flex items-center gap-1.5 text-sm"
+                    :class="usernameResult.ok ? 'text-violet-400' : 'text-red-400'"
+                  >
+                    <svg v-if="usernameResult.ok" class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                    {{ usernameResult.ok ? 'Username updated' : usernameResult.error }}
+                  </span>
+                  <span v-else></span>
+
+                  <button
+                    class="rounded-lg px-4 py-2 text-sm font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 transition-colors disabled:opacity-50"
+                    :disabled="changingUsername"
+                    @click="changeUsername"
+                  >{{ changingUsername ? 'Updating…' : 'Update Username' }}</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="border-t border-zinc-800"></div>
+
             <!-- Change password -->
             <div class="space-y-4">
               <div>
@@ -1050,17 +1184,25 @@ load()
       </div>
 
       <!-- ── Footer ─────────────────────────────────────────────────────────── -->
-      <div class="flex-none px-5 py-4 border-t border-zinc-800 flex items-center justify-end gap-3">
+      <div class="flex-none px-5 py-4 border-t border-zinc-800 flex items-center justify-between">
+        <span class="flex items-center gap-1.5 text-xs">
+          <template v-if="autoSaveStatus === 'saving'">
+            <svg class="w-3.5 h-3.5 animate-spin text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+            </svg>
+            <span class="text-zinc-500">Saving…</span>
+          </template>
+          <template v-else-if="autoSaveStatus === 'saved'">
+            <svg class="w-3.5 h-3.5 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+            <span class="text-violet-400">Saved</span>
+          </template>
+        </span>
         <button
           class="rounded-xl px-5 py-2 text-sm font-medium text-zinc-400 hover:text-zinc-200 bg-zinc-800 hover:bg-zinc-700 transition-colors"
           @click="emit('close')"
-        >Cancel</button>
-        <button
-          class="rounded-xl px-5 py-2 text-sm font-medium bg-violet-600 hover:bg-violet-500 text-white transition-colors disabled:opacity-50"
-          :disabled="saving"
-          data-testid="settings-save"
-          @click="save"
-        >{{ saving ? 'Saving…' : 'Save Settings' }}</button>
+        >Close</button>
       </div>
 
     </div><!-- end modal shell -->

@@ -1,8 +1,9 @@
 <script setup>
 defineProps({
-  backups: { type: Array, default: () => [] },
-  loading: Boolean,
+  backups:  { type: Array,  default: () => [] },
+  loading:  Boolean,
   deleting: { type: String, default: null },
+  detail:   Boolean,  // true = inside a single-service detail view; hides type/service labels
 })
 const emit = defineEmits(['download', 'delete', 'restore'])
 
@@ -27,12 +28,17 @@ function formatSize(size) {
 
 // Colors per service type
 const TYPE_COLORS = {
-  radarr:   'bg-blue-500/15 text-blue-300',
-  sonarr:   'bg-teal-500/15 text-teal-300',
-  prowlarr: 'bg-orange-500/15 text-orange-300',
-  readarr:  'bg-green-500/15 text-green-300',
-  lidarr:   'bg-pink-500/15 text-pink-300',
-  whisparr: 'bg-purple-500/15 text-purple-300',
+  radarr:      'bg-blue-500/15 text-blue-300',
+  sonarr:      'bg-teal-500/15 text-teal-300',
+  prowlarr:    'bg-orange-500/15 text-orange-300',
+  readarr:     'bg-green-500/15 text-green-300',
+  lidarr:      'bg-pink-500/15 text-pink-300',
+  whisparr:    'bg-purple-500/15 text-purple-300',
+  bazarr:      'bg-yellow-500/15 text-yellow-300',
+  seerr:       'bg-sky-500/15 text-sky-300',
+  overseerr:   'bg-sky-500/15 text-sky-300',   // legacy
+  jellyseerr:  'bg-sky-500/15 text-sky-300',   // legacy
+  maintainerr: 'bg-indigo-500/15 text-indigo-300',
 }
 
 function typeBadge(type) {
@@ -85,11 +91,8 @@ function deletingKey(backup) {
             </svg>
           </div>
           <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-2 mb-0.5">
-              <span
-                class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium capitalize"
-                :class="typeBadge(backup.serviceType)"
-              >{{ backup.serviceType || 'unknown' }}</span>
+            <div v-if="!detail" class="flex items-center gap-2 mb-0.5">
+              <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium capitalize" :class="typeBadge(backup.serviceType)">{{ backup.serviceType || 'unknown' }}</span>
               <p class="text-sm font-medium text-zinc-400">{{ backup.serviceName }}</p>
             </div>
             <p class="text-xs text-red-400">{{ backup.error }}</p>
@@ -110,10 +113,7 @@ function deletingKey(backup) {
 
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2 mb-0.5">
-              <span
-                class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium capitalize"
-                :class="typeBadge(backup.serviceType)"
-              >{{ backup.serviceType }}</span>
+              <span v-if="!detail" class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium capitalize" :class="typeBadge(backup.serviceType)">{{ backup.serviceType }}</span>
               <p class="text-sm font-medium text-zinc-200 truncate">{{ backup.name }}</p>
             </div>
             <p class="text-xs text-zinc-500">{{ formatDate(backup.time || backup.date) }}</p>

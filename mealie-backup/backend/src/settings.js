@@ -32,6 +32,7 @@ export const DEFAULTS = {
   auth: {
     sessionSecret: '',
     local: {
+      username: 'admin',
       passwordHash: '',
     },
     oidc: {
