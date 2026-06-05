@@ -6,12 +6,12 @@ import staticPlugin from '@fastify/static'
 import { fileURLToPath } from 'url'
 import { join, dirname } from 'path'
 import { existsSync, readFileSync } from 'fs'
-import { loadConfig } from './config.js'
+import { loadConfig } from '../../../common/backend/src/config.js'
 import { createSettingsStore } from './settings.js'
-import { generateSessionSecret } from './auth.js'
-import { registerAuthRoutes } from './authRoutes.js'
+import { generateSessionSecret } from '../../../common/backend/src/auth.js'
+import { registerAuthRoutes } from '../../../common/backend/src/authRoutes.js'
 import { registerRoutes } from './routes.js'
-import { isDebug, debug } from './debug.js'
+import { isDebug, debug } from '../../../common/backend/src/debug.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const config = loadConfig()

@@ -6,6 +6,7 @@ on:
     paths:
       - "arr-backup/**"
       - "mealie-backup/**"
+      - "common/**"
       - ".github/workflows/build.yml"
   workflow_dispatch:
 
@@ -38,7 +39,8 @@ jobs:
 
       - uses: docker/build-push-action@v6
         with:
-          context: ${{ matrix.folder }}
+          context: .
+          file: ${{ matrix.folder }}/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |

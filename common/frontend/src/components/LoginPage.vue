@@ -1,12 +1,12 @@
 <script setup>
 import { ref } from 'vue'
-import { api } from '../api.js'
-import LogoIcon from './LogoIcon.vue'
+import { api } from '@api'
 
 const props = defineProps({
   bootstrapped: Boolean,
   oidcEnabled: Boolean,
   error: { type: String, default: '' },
+  appName: { type: String, default: '' },
 })
 
 const emit = defineEmits(['authenticated'])
@@ -54,10 +54,10 @@ function loginWithOidc() {
 <template>
   <div class="min-h-screen bg-zinc-950 flex items-center justify-center p-4">
     <div class="w-full max-w-sm">
-      <!-- Logo -->
+      <!-- Logo + title -->
       <div class="text-center mb-8">
-        <LogoIcon :size="52" class="mx-auto" />
-        <h1 class="text-lg font-semibold text-zinc-100 mt-4">Mealie Backup</h1>
+        <slot name="logo" />
+        <h1 class="text-lg font-semibold text-zinc-100 mt-4">{{ appName }}</h1>
         <p class="text-sm text-zinc-500 mt-1">
           {{ bootstrapped ? 'Sign in to continue' : 'Create your admin password to get started' }}
         </p>
@@ -77,7 +77,7 @@ function loginWithOidc() {
               type="text"
               :placeholder="bootstrapped ? 'Enter username' : 'Choose a username'"
               autocomplete="username"
-              class="w-full rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-cyan-500 transition-colors"
+              class="w-full rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-brand-500 transition-colors"
               data-testid="login-username"
               @keydown.enter="submit"
             />
@@ -89,7 +89,7 @@ function loginWithOidc() {
               type="password"
               placeholder="Enter password"
               autocomplete="current-password"
-              class="w-full rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-cyan-500 transition-colors"
+              class="w-full rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-brand-500 transition-colors"
               data-testid="login-password"
               @keydown.enter="submit"
             />
@@ -101,7 +101,7 @@ function loginWithOidc() {
               v-model="confirm"
               type="password"
               placeholder="Confirm password"
-              class="w-full rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-cyan-500 transition-colors"
+              class="w-full rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-brand-500 transition-colors"
               data-testid="login-confirm"
               @keydown.enter="submit"
             />
@@ -116,7 +116,7 @@ function loginWithOidc() {
 
         <!-- Submit -->
         <button
-          class="w-full rounded-xl py-2.5 text-sm font-medium bg-cyan-600 hover:bg-cyan-500 text-white transition-colors disabled:opacity-50"
+          class="w-full rounded-xl py-2.5 text-sm font-medium bg-brand-600 hover:bg-brand-500 text-white transition-colors disabled:opacity-50"
           :disabled="loading"
           data-testid="login-submit"
           @click="submit"

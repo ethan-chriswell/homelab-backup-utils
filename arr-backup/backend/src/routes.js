@@ -1,7 +1,7 @@
 import { createClient } from './arr.js'
-import { createStorage } from './storage.js'
-import { updateSchedules } from './scheduler.js'
-import { debug } from './debug.js'
+import { createStorage } from '../../../common/backend/src/storage.js'
+import { updateSchedules } from '../../../common/backend/src/scheduler.js'
+import { debug } from '../../../common/backend/src/debug.js'
 
 function computeToDelete(backups, retention) {
   const { keepLast, keepDays } = retention

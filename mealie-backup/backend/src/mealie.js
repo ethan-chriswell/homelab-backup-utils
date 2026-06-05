@@ -1,4 +1,4 @@
-import { debug, maskToken } from './debug.js'
+import { debug, maskToken } from '../../../common/backend/src/debug.js'
 
 export function createMealieClient(baseUrl, token) {
   function authHeaders() {

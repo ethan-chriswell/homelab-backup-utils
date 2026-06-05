@@ -1,13 +1,13 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
 import { api } from './api.js'
-import StatusCard from './components/StatusCard.vue'
+import StatusCard from '@common/components/StatusCard.vue'
 import BackupList from './components/BackupList.vue'
 import UploadModal from './components/UploadModal.vue'
 import SettingsModal from './components/SettingsModal.vue'
-import LoginPage from './components/LoginPage.vue'
+import LoginPage from '@common/components/LoginPage.vue'
 import LogoIcon from './components/LogoIcon.vue'
-import Toast from './components/Toast.vue'
+import Toast from '@common/components/Toast.vue'
 
 // ── Auth state ────────────────────────────────────────────────────────────────
 const authLoading = ref(true)
@@ -212,11 +212,16 @@ onMounted(async () => {
   <!-- Login / bootstrap page -->
   <LoginPage
     v-else-if="!authenticated"
+    app-name="Mealie Backup"
     :bootstrapped="bootstrapped"
     :oidc-enabled="oidcEnabled"
     :error="oidcError"
     @authenticated="onAuthenticated"
-  />
+  >
+    <template #logo>
+      <LogoIcon :size="52" class="mx-auto" />
+    </template>
+  </LoginPage>
 
   <!-- Main app -->
   <div v-else class="min-h-screen bg-zinc-950">

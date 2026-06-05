@@ -1,4 +1,4 @@
-import { debug } from './debug.js'
+import { debug } from '../../../common/backend/src/debug.js'
 
 const ARR_TYPES = new Set(['radarr', 'sonarr', 'prowlarr', 'readarr', 'lidarr', 'whisparr'])
 
