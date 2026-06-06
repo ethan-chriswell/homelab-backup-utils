@@ -4,7 +4,7 @@ import { updateSchedules } from '../../../common/backend/src/scheduler.js'
 import { debug } from '../../../common/backend/src/debug.js'
 import { verifyJwt } from '../../../common/backend/src/auth.js'
 
-function computeToDelete(backups, retention) {
+export function computeToDelete(backups, retention) {
   const { keepLast, keepDays } = retention
   const hasCountRule = keepLast > 0
   const hasAgeRule = keepDays > 0

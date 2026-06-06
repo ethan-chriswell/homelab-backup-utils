@@ -5,6 +5,7 @@ build/
 .DS_Store
 *.log
 .idea/
+.claude
 
 # Playwright test artifacts
 mealie-backup-ui/e2e/test-results/

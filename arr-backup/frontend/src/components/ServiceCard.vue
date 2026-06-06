@@ -64,6 +64,7 @@ const typeBadge = (t) => TYPE_COLORS[t] || 'bg-zinc-500/15 text-zinc-400'
 <template>
   <div
     class="rounded-2xl bg-zinc-900 border border-zinc-800 p-5 flex flex-col gap-4 cursor-pointer hover:border-zinc-700 hover:bg-zinc-800/40 transition-all"
+    :data-testid="`service-card-${service.id}`"
     @click="emit('select', service.id)"
   >
     <!-- Service name + status -->
@@ -115,6 +116,7 @@ const typeBadge = (t) => TYPE_COLORS[t] || 'bg-zinc-500/15 text-zinc-400'
         class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium bg-zinc-800 hover:bg-violet-600 text-zinc-400 hover:text-white transition-colors disabled:opacity-40 shrink-0"
         :disabled="backing"
         title="Backup this service now"
+        :data-testid="`service-backup-btn-${service.id}`"
         @click.stop="emit('backup', service.id)"
       >
         <svg class="w-3 h-3 shrink-0" :class="{ 'animate-spin': backing }" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
