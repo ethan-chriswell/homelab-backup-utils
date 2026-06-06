@@ -1,5 +1,5 @@
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'fs'
-import { join } from 'path'
+import { join, resolve, normalize } from 'path'
 import { pipeline } from 'stream/promises'
 import { Readable } from 'stream'
 import { debug } from './debug.js'
@@ -8,26 +8,41 @@ function createLocalStorage(basePath) {
   debug('storage', `local storage init at ${basePath}`)
   mkdirSync(basePath, { recursive: true })
 
+  const resolvedBase = resolve(basePath)
+
+  function safePath(name) {
+    // Reject names that contain path separators (even URL-encoded ones were decoded by the router)
+    if (typeof name !== 'string' || name.includes('/') || name.includes('\\')) {
+      throw Object.assign(new Error('Invalid filename'), { status: 400 })
+    }
+    const p = resolve(join(resolvedBase, name))
+    // Ensure the resolved path is strictly inside the base directory
+    if (!p.startsWith(resolvedBase + '/') || p === resolvedBase) {
+      throw Object.assign(new Error('Invalid filename'), { status: 400 })
+    }
+    return p
+  }
+
   return {
     type: 'local',
 
     async save(name, buffer) {
-      const dest = join(basePath, name)
+      const dest = safePath(name)
       debug('storage', `local save: ${dest} (${buffer.length} bytes)`)
       await pipeline(Readable.from(buffer), createWriteStream(dest))
       debug('storage', `local save complete: ${dest}`)
     },
 
     list() {
-      debug('storage', `local list: ${basePath}`)
-      if (!existsSync(basePath)) {
+      debug('storage', `local list: ${resolvedBase}`)
+      if (!existsSync(resolvedBase)) {
         debug('storage', `local list: path does not exist`)
         return []
       }
-      const files = readdirSync(basePath)
+      const files = readdirSync(resolvedBase)
         .filter(f => f.endsWith('.zip'))
         .map(f => {
-          const stat = statSync(join(basePath, f))
+          const stat = statSync(join(resolvedBase, f))
           return { name: f, date: stat.mtime.toISOString(), size: stat.size, source: 'local' }
         })
         .sort((a, b) => new Date(b.date) - new Date(a.date))
@@ -36,14 +51,14 @@ function createLocalStorage(basePath) {
     },
 
     getStream(name) {
-      const p = join(basePath, name)
+      const p = safePath(name)
       debug('storage', `local getStream: ${p}`)
       if (!existsSync(p)) throw Object.assign(new Error('Not found'), { status: 404 })
       return createReadStream(p)
     },
 
     delete(name) {
-      const p = join(basePath, name)
+      const p = safePath(name)
       debug('storage', `local delete: ${p}`)
       if (existsSync(p)) {
         unlinkSync(p)

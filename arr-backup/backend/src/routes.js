@@ -2,6 +2,7 @@ import { createClient } from './arr.js'
 import { createStorage } from '../../../common/backend/src/storage.js'
 import { updateSchedules } from '../../../common/backend/src/scheduler.js'
 import { debug } from '../../../common/backend/src/debug.js'
+import { verifyJwt } from '../../../common/backend/src/auth.js'
 
 function computeToDelete(backups, retention) {
   const { keepLast, keepDays } = retention
@@ -22,13 +23,20 @@ export async function registerRoutes(app, { settingsStore }) {
   // Health endpoint — no auth, used by Docker HEALTHCHECK
   app.get('/health', async () => ({ ok: true }))
 
-  // Auth guard — all /api/* routes except /api/auth/* and /api/config (Docker healthcheck)
+  // Auth guard — all /api/* routes except /api/auth/* and /api/config
   app.addHook('preHandler', async (req, reply) => {
     if (!req.url.startsWith('/api/')) return
     const exempt = req.url === '/api/config' || req.url.startsWith('/api/auth/')
     if (exempt) return
-    if (!req.session?.authenticated) {
+    const h = req.headers.authorization
+    if (!h?.startsWith('Bearer ')) {
       debug('routes', `auth guard: blocked ${req.method} ${req.url}`)
+      return reply.code(401).send({ error: 'Unauthorized' })
+    }
+    try {
+      verifyJwt(h.slice(7), settingsStore.get().auth.sessionSecret)
+    } catch {
+      debug('routes', `auth guard: invalid token for ${req.method} ${req.url}`)
       return reply.code(401).send({ error: 'Unauthorized' })
     }
   })
@@ -291,9 +299,14 @@ export async function registerRoutes(app, { settingsStore }) {
 
     if (storageType === 'local') {
       const { mkdirSync } = await import('fs')
-      const path = body.storage?.local?.path ?? current.storage.local.path
+      const { resolve: resolvePath } = await import('path')
+      const rawPath = body.storage?.local?.path ?? current.storage.local.path
+      const resolved = resolvePath(rawPath)
+      if (!resolved.startsWith('/data/') && resolved !== '/data') {
+        return reply.send({ ok: false, error: 'Storage path must be under /data/' })
+      }
       try {
-        mkdirSync(path, { recursive: true })
+        mkdirSync(resolved, { recursive: true })
         return reply.send({ ok: true })
       } catch (err) {
         return reply.send({ ok: false, error: err.message })
@@ -437,6 +450,16 @@ export async function registerRoutes(app, { settingsStore }) {
 
       if (!serviceId) return reply.code(400).send({ error: 'serviceId field is required' })
       if (!fileData) return reply.code(400).send({ error: 'No file uploaded' })
+      if (!fileData.filename.toLowerCase().endsWith('.zip')) {
+        return reply.code(400).send({ error: 'File must be a ZIP archive' })
+      }
+      if (
+        fileData.buffer.length < 4 ||
+        fileData.buffer[0] !== 0x50 || fileData.buffer[1] !== 0x4B ||
+        fileData.buffer[2] !== 0x03 || fileData.buffer[3] !== 0x04
+      ) {
+        return reply.code(400).send({ error: 'File does not appear to be a valid ZIP archive' })
+      }
 
       const service = getService(serviceId)
       debug('routes', `upload: serviceId=${serviceId} filename=${fileData.filename} size=${fileData.buffer.length}`)

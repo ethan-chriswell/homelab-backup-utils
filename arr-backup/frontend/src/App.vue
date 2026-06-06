@@ -238,6 +238,10 @@ onUnmounted(() => {
 
 onMounted(async () => {
   const params = new URLSearchParams(window.location.search)
+  if (params.has('token')) {
+    api.auth.setToken(params.get('token'))
+    window.history.replaceState({}, '', '/')
+  }
   if (params.has('auth_error')) {
     oidcError.value = params.get('auth_error')
     window.history.replaceState({}, '', '/')

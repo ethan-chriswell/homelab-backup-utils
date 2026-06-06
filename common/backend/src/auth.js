@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs'
-import { randomBytes } from 'crypto'
+import { randomBytes, createHmac, timingSafeEqual } from 'crypto'
 import { Issuer, generators } from 'openid-client'
 import { debug } from './debug.js'
 
@@ -16,6 +16,31 @@ export async function hashPassword(password) {
 
 export async function verifyPassword(password, hash) {
   return bcrypt.compare(password, hash)
+}
+
+export function signJwt(payload, secret, expiresInSeconds = 7 * 24 * 3600) {
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')
+  const now = Math.floor(Date.now() / 1000)
+  const body = Buffer.from(JSON.stringify({ ...payload, iat: now, exp: now + expiresInSeconds })).toString('base64url')
+  const sig = createHmac('sha256', secret).update(`${header}.${body}`).digest('base64url')
+  return `${header}.${body}.${sig}`
+}
+
+export function verifyJwt(token, secret) {
+  const parts = (token || '').split('.')
+  if (parts.length !== 3) throw new Error('Invalid token format')
+  const [header, body, sig] = parts
+  const expected = createHmac('sha256', secret).update(`${header}.${body}`).digest('base64url')
+  const sigBuf = Buffer.from(sig, 'base64url')
+  const expBuf = Buffer.from(expected, 'base64url')
+  if (sigBuf.length !== expBuf.length || !timingSafeEqual(sigBuf, expBuf)) {
+    throw new Error('Invalid token signature')
+  }
+  const claims = JSON.parse(Buffer.from(body, 'base64url').toString())
+  if (claims.exp && claims.exp < Math.floor(Date.now() / 1000)) {
+    throw new Error('Token expired')
+  }
+  return claims
 }
 
 let _oidcClient = null

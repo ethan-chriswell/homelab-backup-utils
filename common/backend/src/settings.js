@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
+import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from 'fs'
 import { dirname } from 'path'
 import { debug } from './debug.js'
 
@@ -44,8 +44,12 @@ export function createSettingsStore(path, { defaults, seedFromEnv } = {}) {
     get() { return current },
     save(updates) {
       current = deepMerge(current, updates)
-      mkdirSync(dirname(path), { recursive: true })
-      writeFileSync(path, JSON.stringify(current, null, 2))
+      const dir = dirname(path)
+      mkdirSync(dir, { recursive: true })
+      // Write to a temp file then rename — atomic on Linux/macOS, avoids partial writes
+      const tmp = `${path}.tmp`
+      writeFileSync(tmp, JSON.stringify(current, null, 2))
+      renameSync(tmp, path)
       debug('settings', `settings written to ${path}`)
       return current
     },

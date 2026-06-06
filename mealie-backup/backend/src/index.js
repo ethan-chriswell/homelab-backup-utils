@@ -1,8 +1,8 @@
 import Fastify from 'fastify'
-import cookie from '@fastify/cookie'
-import session from '@fastify/session'
 import multipart from '@fastify/multipart'
 import staticPlugin from '@fastify/static'
+import rateLimit from '@fastify/rate-limit'
+import helmet from '@fastify/helmet'
 import { fileURLToPath } from 'url'
 import { join, dirname } from 'path'
 import { existsSync, readFileSync } from 'fs'
@@ -39,19 +39,21 @@ const app = Fastify({
   },
 })
 
-await app.register(cookie)
-await app.register(session, {
-  secret: currentSettings.auth.sessionSecret,
-  cookie: {
-    httpOnly: true,
-    secure: false, // homelab: typically HTTP behind a reverse proxy
-    sameSite: 'lax',
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-  },
-  saveUninitialized: false,
+await app.register(helmet, {
+  // CSP requires per-request nonces or build-time hashes for Vite SPAs — skip for now,
+  // but keep all other protections: X-Frame-Options, X-Content-Type-Options, Referrer-Policy, etc.
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false,
 })
 
 await app.register(multipart, { limits: { fileSize: 500 * 1024 * 1024 } })
+
+// Rate-limit: permissive global limit, then tighter per-route limits on auth endpoints
+await app.register(rateLimit, {
+  global: false,
+  keyGenerator: (req) => req.ip,
+  errorResponseBuilder: () => ({ error: 'Too many requests — please wait before trying again' }),
+})
 
 debug('server', 'registering auth routes')
 await registerAuthRoutes(app, { settingsStore })

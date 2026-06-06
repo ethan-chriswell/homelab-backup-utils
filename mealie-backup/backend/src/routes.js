@@ -2,6 +2,7 @@ import { createMealieClient } from './mealie.js'
 import { createStorage } from '../../../common/backend/src/storage.js'
 import { updateSchedule } from '../../../common/backend/src/scheduler.js'
 import { debug, maskToken } from '../../../common/backend/src/debug.js'
+import { verifyJwt } from '../../../common/backend/src/auth.js'
 
 function computeToDelete(backups, retention) {
   const { keepLast, keepDays } = retention
@@ -21,13 +22,20 @@ export async function registerRoutes(app, { settingsStore }) {
   // Health endpoint — no auth, used by Docker HEALTHCHECK
   app.get('/health', async () => ({ ok: true }))
 
-  // Auth guard — all /api/* routes except /api/auth/* and /api/config (Docker healthcheck)
+  // Auth guard — all /api/* routes except /api/auth/* and /api/config
   app.addHook('preHandler', async (req, reply) => {
     if (!req.url.startsWith('/api/')) return
     const exempt = req.url === '/api/config' || req.url.startsWith('/api/auth/')
     if (exempt) return
-    if (!req.session?.authenticated) {
+    const h = req.headers.authorization
+    if (!h?.startsWith('Bearer ')) {
       debug('routes', `auth guard: blocked ${req.method} ${req.url}`)
+      return reply.code(401).send({ error: 'Unauthorized' })
+    }
+    try {
+      verifyJwt(h.slice(7), settingsStore.get().auth.sessionSecret)
+    } catch {
+      debug('routes', `auth guard: invalid token for ${req.method} ${req.url}`)
       return reply.code(401).send({ error: 'Unauthorized' })
     }
   })
@@ -152,9 +160,14 @@ export async function registerRoutes(app, { settingsStore }) {
 
     if (storageType === 'local') {
       const { mkdirSync } = await import('fs')
-      const path = body.storage?.local?.path ?? current.storage.local.path
+      const { resolve: resolvePath } = await import('path')
+      const rawPath = body.storage?.local?.path ?? current.storage.local.path
+      const resolved = resolvePath(rawPath)
+      if (!resolved.startsWith('/data/') && resolved !== '/data') {
+        return reply.send({ ok: false, error: 'Storage path must be under /data/' })
+      }
       try {
-        mkdirSync(path, { recursive: true })
+        mkdirSync(resolved, { recursive: true })
         return reply.send({ ok: true })
       } catch (err) {
         return reply.send({ ok: false, error: err.message })
@@ -389,10 +402,20 @@ export async function registerRoutes(app, { settingsStore }) {
       const data = await req.file()
       if (!data) return reply.code(400).send({ error: 'No file uploaded' })
       debug('routes', `upload: filename=${data.filename} mimetype=${data.mimetype}`)
+      if (!data.filename.toLowerCase().endsWith('.zip')) {
+        return reply.code(400).send({ error: 'File must be a ZIP archive' })
+      }
       const chunks = []
       for await (const chunk of data.file) chunks.push(chunk)
       const buffer = Buffer.concat(chunks)
       debug('routes', `upload: buffer size=${buffer.length}`)
+      if (
+        buffer.length < 4 ||
+        buffer[0] !== 0x50 || buffer[1] !== 0x4B ||
+        buffer[2] !== 0x03 || buffer[3] !== 0x04
+      ) {
+        return reply.code(400).send({ error: 'File does not appear to be a valid ZIP archive' })
+      }
       return reply.send(await getMealie().uploadBackup(data.filename, buffer))
     } catch (err) {
       debug('routes', `upload error: ${err.message}`)

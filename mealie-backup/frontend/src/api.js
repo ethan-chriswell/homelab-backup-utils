@@ -1,5 +1,14 @@
+const TOKEN_KEY = 'auth_token'
+
+function getToken() { return localStorage.getItem(TOKEN_KEY) }
+function setToken(t) { localStorage.setItem(TOKEN_KEY, t) }
+function clearToken() { localStorage.removeItem(TOKEN_KEY) }
+
 async function request(path, options = {}) {
-  const res = await fetch(path, options)
+  const token = getToken()
+  const headers = { ...options.headers }
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  const res = await fetch(path, { ...options, headers })
   if (!res.ok) {
     const data = await res.json().catch(() => ({ error: res.statusText }))
     throw new Error(data.error || `Request failed: ${res.status}`)
@@ -59,17 +68,25 @@ export const api = {
   auth: {
     status: () => request('/api/auth/status'),
 
-    bootstrap: (username, password) => request('/api/auth/bootstrap', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
-    }),
+    bootstrap: async (username, password) => {
+      const data = await request('/api/auth/bootstrap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      })
+      if (data?.token) setToken(data.token)
+      return data
+    },
 
-    login: (username, password) => request('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
-    }),
+    login: async (username, password) => {
+      const data = await request('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      })
+      if (data?.token) setToken(data.token)
+      return data
+    },
 
     changePassword: (currentPassword, newPassword) => request('/api/auth/change-password', {
       method: 'POST',
@@ -83,6 +100,11 @@ export const api = {
       body: JSON.stringify({ currentPassword, newUsername }),
     }),
 
-    logout: () => request('/api/auth/logout', { method: 'POST' }),
+    logout: async () => {
+      clearToken()
+      return request('/api/auth/logout', { method: 'POST' })
+    },
+
+    setToken,
   },
 }
